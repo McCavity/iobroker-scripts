@@ -18,7 +18,7 @@ Disaster-recovery for the scripts I run inside ioBroker (`iobapp02`). They norma
 ├── LICENSE            ← MIT
 ├── .gitignore
 ├── tools/
-│   └── export-scripts.js   ← runs INSIDE ioBroker; writes the contents of scripts/
+│   └── export-scripts.sh   ← runs on iobapp02; uses iobroker CLI to dump scripts/
 └── scripts/                ← auto-generated; one file per ioBroker script object
     ├── common/
     │   ├── signaltower-controller.js
@@ -66,16 +66,22 @@ For Blockly scripts, the source contains both the Blockly XML (as a comment) and
 
 ### Periodic export
 
-The exporter `tools/export-scripts.js` is itself an ioBroker script — it lives at `script.js.tools.export-scripts` inside ioBroker and writes the file tree of `scripts/` on the host filesystem at `/home/iobuser/iobroker-scripts/scripts/`. After it has run, on the host:
+`tools/export-scripts.sh` runs on the iobapp02 host (NOT inside ioBroker) and uses the `iobroker` CLI to list + dump all script objects:
 
 ```bash
-cd /home/iobuser/iobroker-scripts
+# On iobapp02:
+bash /home/iobuser/iobroker-scripts/tools/export-scripts.sh
+
+# Then on Mac (where this repo's local clone has gh auth):
+rsync -av iobuser@iobapp02:/home/iobuser/iobroker-scripts/scripts/ \
+          ~/git/projects/own/iobroker-scripts/scripts/
+cd ~/git/projects/own/iobroker-scripts
 git add -A
-git diff --cached --quiet || git commit -m "auto-export $(date '+%Y-%m-%d %H:%M')"
+git diff --cached --quiet || git commit -m "auto-export $(date +%Y-%m-%d_%H:%M)"
 git push
 ```
 
-For now this is manual; a host-cron may be added later.
+For now this is manual; host-cron is a future enhancement.
 
 ## Related
 
