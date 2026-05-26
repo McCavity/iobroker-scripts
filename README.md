@@ -18,22 +18,19 @@ Disaster-recovery for the scripts I run inside ioBroker (`iobapp02`). They norma
 ├── LICENSE            ← MIT
 ├── .gitignore
 ├── tools/
-│   └── export-scripts.sh   ← runs on iobapp02; uses iobroker CLI to dump scripts/
-└── scripts/                ← auto-generated; one file per ioBroker script object
+│   └── zip-to-scripts.py   ← converts an ioBroker UI ZIP export into scripts/
+└── scripts/                ← one file per ioBroker script object
     ├── common/
     │   ├── signaltower-controller.js
     │   └── signaltower-heartbeat.js
     ├── global/
-    │   └── signaltower-helper.js
-    ├── scenes/
-    │   └── lighting/
-    │       ├── auto-switch.js
-    │       ├── christmas.js
-    │       ├── everyday.js
-    │       └── smart-switches.js
-    └── erinnerungen/
-        ├── battery_check.js
-        └── ...
+    │   └── signaltower-helpers.js
+    └── scenes/
+        └── lighting/
+            ├── auto-switch.js
+            ├── christmas.js
+            ├── everyday.js
+            └── smart-switches.js
 ```
 
 The directory tree under `scripts/` mirrors the dotted ioBroker path: `script.js.scenes.lighting.smart-switches` → `scripts/scenes/lighting/smart-switches.js`.
@@ -46,7 +43,7 @@ Each `.js` file starts with a comment block carrying the object's metadata, then
 /* iobroker-scripts-export
  * id:         script.js.common.signaltower-heartbeat
  * name:       signaltower-heartbeat
- * engineType: Javascript/Typescript
+ * engineType: Javascript/js
  * enabled:    true
  */
 
@@ -58,30 +55,33 @@ For Blockly scripts, the source contains both the Blockly XML (as a comment) and
 
 ## Workflow
 
-### One-off restore (rare, but the reason this repo exists)
-
-1. SSH `iobuser@iobapp02`
-2. Find the file you want
-3. Copy the source (everything after the `*/` of the frontmatter) into a fresh ioBroker script with the matching engine type and enabled-state from the frontmatter
-
 ### Periodic export
 
-`tools/export-scripts.sh` runs on the iobapp02 host (NOT inside ioBroker) and uses the `iobroker` CLI to list + dump all script objects:
+The ioBroker admin UI has a built-in scripts-export. Three steps:
 
-```bash
-# On iobapp02:
-bash /home/iobuser/iobroker-scripts/tools/export-scripts.sh
+1. **In ioBroker UI:** Skripte → 3-dots menu → „Exportieren" → ZIP downloads to `~/Downloads/YYYY-MM-DD-scripts.zip`
+2. **On the Mac:**
+   ```bash
+   cd ~/git/projects/own/iobroker-scripts
+   python3 tools/zip-to-scripts.py
+   # → auto-detects newest *-scripts.zip in ~/Downloads
+   # → wipes scripts/ and writes the fresh tree
+   ```
+3. **Commit:**
+   ```bash
+   git add -A
+   git diff --cached --stat   # review what changed
+   git commit -m "scripts export $(date +%Y-%m-%d)"
+   git push
+   ```
 
-# Then on Mac (where this repo's local clone has gh auth):
-rsync -av iobuser@iobapp02:/home/iobuser/iobroker-scripts/scripts/ \
-          ~/git/projects/own/iobroker-scripts/scripts/
-cd ~/git/projects/own/iobroker-scripts
-git add -A
-git diff --cached --quiet || git commit -m "auto-export $(date +%Y-%m-%d_%H:%M)"
-git push
-```
+Pass an explicit path if needed: `python3 tools/zip-to-scripts.py /path/to/export.zip`.
 
-For now this is manual; host-cron is a future enhancement.
+### One-off restore
+
+1. Find the file in this repo
+2. Read the frontmatter for the original `id`, `engineType`, `enabled` state
+3. In ioBroker UI: create a fresh script at the matching path, paste the source (everything after `*/` line)
 
 ## Related
 

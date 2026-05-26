@@ -4,76 +4,74 @@
 
 ## What this repo is
 
-A version-controlled snapshot of all `script.js.*` objects from Hennings ioBroker instance on `iobapp02`. The actual source-of-truth is **ioBroker itself** — this repo is a downstream backup. So: edits in the repo do **not** automatically propagate to ioBroker.
+A version-controlled snapshot of all `script.js.*` objects from Hennings ioBroker instance on `iobapp02`. The actual source-of-truth is **ioBroker itself** — this repo is a downstream backup. Edits in the repo do **not** automatically propagate to ioBroker.
 
 ## Editing flow
 
-The intended editing direction is **ioBroker → repo**, not the other way around. If you change a script in this repo, you also need to copy it back into the ioBroker UI for the change to take effect. The exporter will then re-write the file on the next run.
+The intended editing direction is **ioBroker → repo**, not the other way around. If you change a script in this repo, you also need to copy it back into the ioBroker UI for the change to take effect. The next ZIP export will overwrite the repo copy.
 
-## Why shell instead of ioBroker JS
+## How the export works
 
-We started with an ioBroker-JS exporter using `getObjectListAsync` — but the JavaScript-adapter sandbox in iobroker.javascript v7.x only exposes `getObjectAsync` (single object), not list / view APIs. Listing all `script.js.*` IDs requires either an unconvenient selector workaround, or simply shelling out to the well-tested `iobroker` CLI.
+ioBroker's admin UI has a built-in scripts-export that produces a ZIP with one JSON file per script object (full `_id`, `common.*`, `native`, etc.). The path is `~/Downloads/YYYY-MM-DD-scripts.zip`.
 
-`tools/export-scripts.sh` calls `iobroker list scripts` + `iobroker object get` for each. Clean, no sandbox quirks, easy to test on the command line.
-
-## Running the export
-
-On the ioBroker host (`iobapp02`) as `iobuser`:
+`tools/zip-to-scripts.py` consumes that ZIP and writes our `scripts/` tree:
 
 ```bash
-bash /home/iobuser/iobroker-scripts/tools/export-scripts.sh
-```
-
-Output: `N scripts written, M skipped — Target: /home/iobuser/iobroker-scripts/scripts/`
-
-Then on the Mac (or wherever your repo clone lives):
-
-```bash
-rsync -av iobuser@iobapp02:/home/iobuser/iobroker-scripts/scripts/ \
-          ~/git/projects/own/iobroker-scripts/scripts/
 cd ~/git/projects/own/iobroker-scripts
-git add -A
-git diff --cached --quiet || git commit -m "auto-export $(date +%Y-%m-%d_%H:%M)"
-git push
+python3 tools/zip-to-scripts.py    # auto-detects latest in ~/Downloads
 ```
 
-For a future cron job: the iobapp02-side rsync+push (with iobuser's GitHub credentials) is the cleanest path. For now, manual is fine — Henning runs it after meaningful changes.
+## Why this approach (and not what we tried first)
+
+We started with two paths that both failed:
+
+1. **ioBroker JS-script using `getObjectListAsync`** — the JS-adapter sandbox in iobroker.javascript v7.x only exposes `getObjectAsync` (single object), not list / view APIs. Listing all `script.js.*` IDs from inside a script isn't possible without ugly workarounds.
+
+2. **Shell script using `iobroker list scripts` + `jq` on iobapp02** — works in principle but needs `jq` installed (not default), needs git push from iobapp02 (no GitHub credentials configured for `iobuser`), and pulls us back into permissions management between `iobuser` and `iobroker` daemon user.
+
+The UI's official ZIP export sidesteps all of this. ioBroker exports cleanly, Mac handles the conversion + git locally where credentials already exist.
 
 ## Repo conventions
 
 - **License:** MIT
-- **Branch protection:** Solo-Maintainer-Pattern (required_review=0, enforce_admins=false, no force-push, no deletion)
-- **Public:** Yes — illustrative for others, secrets are LAN-only.
-- **Secrets in scripts:** the signaltower key (`b6f43fe3...`) is committed because the endpoint is LAN-only (172.16.31.241). If this ever changes, the key has to rotate AND be pulled out into a config file.
+- **Branch protection:** Solo-Maintainer-Pattern (required PRs but `required_approving_review_count: 0`, `enforce_admins: false` — Henning bypasses for trivial direct pushes)
+- **Public:** Yes — illustrative for others
+- **Secrets in committed scripts:** the signaltower API key is committed because the endpoint is LAN-only (172.16.31.241). If this ever changes, rotate AND pull the key out into a config file before re-exporting.
 
-## File format
+## File format details
 
-Each `.js` file starts with a comment block carrying the object's metadata, then the source as-is:
+The frontmatter block tracks all fields needed for a restore:
 
 ```javascript
 /* iobroker-scripts-export
  * id:         script.js.common.signaltower-heartbeat
  * name:       signaltower-heartbeat
- * engineType: Javascript/Typescript
- * enabled:    true
+ * engineType: Javascript/js                  ← "Javascript/js" or "Blockly" or "Rules"
+ * enabled:    true                            ← restore should preserve this
+ * debug:      true                            ← only present when true
+ * verbose:    true                            ← only present when true
+ * expert:     true                            ← only present when true
  */
 
-const HEARTBEAT_URL = 'http://172.16.31.241:5000/heartbeat';
-// ...
+<source code as-is>
 ```
 
-For Blockly scripts, the source contains both the Blockly XML (as a comment block at top) and the rendered JS. Saving as `.js` works for both — the frontmatter's `engineType: Blockly` field flags it.
+For Blockly: `common.source` contains both the Blockly XML (as a `<xml>...</xml>` block at the top, inside a JS comment) and the rendered JS at the bottom. Saving as `.js` preserves both — the frontmatter `engineType: Blockly` flags it for re-import.
 
 ## Architecture decisions
 
-### Why not store the JSON object dump directly?
+### Why not store the raw JSON dump per script?
 
-The interesting part (source code) becomes hard to read in JSON-escaped strings; diffs are useless. Frontmatter-as-comment + plain JS body is the right format.
+The JSON has the source code as a JSON-escaped string — newlines as `\n`, quotes as `\"`, etc. Diffs are useless across formatting changes; readability is terrible. Extracting to `.js` with frontmatter as JS comment is the right format.
 
-### Why `.js` for Blockly too?
+### Why wipe `scripts/` before each export?
 
-ioBroker stores Blockly scripts with both XML and the rendered JS in `common.source`. Saving as `.js` preserves both, frontmatter flags `engineType: Blockly`. Re-importing means pasting the XML part into the Blockly editor.
+If we just overwrite, scripts deleted in ioBroker linger in the repo forever. Wiping ensures the repo reflects the current ioBroker state. Git tracks the deletions automatically.
 
-### Where does the exporter live?
+### Future: cron job?
 
-The canonical version lives in this repo as `tools/export-scripts.sh`. It runs on the iobapp02 host (NOT inside ioBroker), using the `iobroker` CLI. The repo's local clone on iobapp02 is at `/home/iobuser/iobroker-scripts/`.
+For full automation we'd need:
+- A way to trigger the UI export non-interactively (the admin REST API at port 8081 can probably do this — `POST /scripts/export` or similar; not yet investigated)
+- Git push from iobapp02 (or rsync to a host that can push)
+
+Not needed for now — manual export is fine when meaningful changes happen.
