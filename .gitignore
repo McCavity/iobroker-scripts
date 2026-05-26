@@ -1,0 +1,11 @@
+# OS-Krempel
+.DS_Store
+Thumbs.db
+
+# Editor-Artefakte
+*.swp
+*~
+.vscode/
+
+# Lokale Experimente
+*.local
