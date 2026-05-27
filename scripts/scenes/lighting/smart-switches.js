@@ -132,19 +132,77 @@ onSwitch('00158d000ab7850f', 'Wohnzimmer Couchtisch', {
 
 // ---------------------------------------------------------------------------
 //  6) Wohnzimmer Eintracht-Logo Nachtlicht
-//     Bewegung im Wohnzimmer + dunkel (<15 lx) → Eintracht-Logo 60s an
+//     Logo dient tagsüber als Deko-Licht (via Astro-Schalter aus
+//     scenes-lighting-everyday.js + auto-switch.js — schaltet sich um 01:00
+//     hart aus und um 05:00 wieder ein). In dem 4-Stunden-Fenster dazwischen
+//     soll es bei Wohnzimmer-Bewegung 60s als Nachtlicht reagieren, wenn es
+//     tatsächlich dunkel ist.
+//
+//     Defense in depth:
+//       1. Hartes Zeitfenster 01:00–05:00 (egal was der Lux-Sensor sagt)
+//       2. `_manual`-Override (Party-Modus → nur loggen)
+//       3. Lux-State-Fallback: `illuminance` (Vor-Re-Pair-Name) ODER
+//          `illuminance_raw` (nach 2026-05-27 Re-Pair / ZigBee-Adapter-Update)
+//       4. Fail-closed wenn beide States fehlen oder undefined sind
+//
+//     Bug-Historie:
+//       2026-05-27 — `getState(...illuminance).val` lieferte `undefined` nach
+//       dem CR2450-Re-Pair (Adapter heißt den State jetzt `illuminance_raw`).
+//       `undefined > 15` ist `false` in JS, der Lux-Check schlug fehl, das
+//       Logo ging tagsüber an. Plus: das Zeitfenster war im Skript nie
+//       umgesetzt — Use-Case-Kommentar sprach nur von "dunkel".
 // ---------------------------------------------------------------------------
 const WZ_MOTION_DEV     = '00158d0007c62b1b';
 const EINTRACHT_LOGO    = 'sonoff.0.Eintracht Logo.POWER';
+const MANUAL_OVERRIDE   = '0_userdata.0.trigger.scenes.lighting._manual';
 const NIGHTLIGHT_LUX    = 15;
 const NIGHTLIGHT_TIME   = 60 * 1000;  // 60 Sekunden
+const NIGHT_START_HOUR  = 1;          // ab 01:00 inkl.
+const NIGHT_END_HOUR    = 5;          // bis 05:00 exkl.
+
+// Helper: aktueller Lux-Wert mit Adapter-Rename-Fallback. Liefert null wenn
+// kein State einen numerischen Wert hat → Caller behandelt das als
+// "Unklar — nicht auslösen".
+function getWzLux() {
+    const candidates = [
+        `zigbee.0.${WZ_MOTION_DEV}.illuminance`,
+        `zigbee.0.${WZ_MOTION_DEV}.illuminance_raw`,
+    ];
+    for (const id of candidates) {
+        const s = getState(id);
+        if (s && typeof s.val === 'number') return s.val;
+    }
+    return null;
+}
+
+// Helper: ist gerade Nacht im Sinne des Use-Cases?
+function isNightHours() {
+    const h = new Date().getHours();
+    return h >= NIGHT_START_HOUR && h < NIGHT_END_HOUR;
+}
 
 let eintrachtTimeout = null;
 
 on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, val: true, change: 'ne' }, () => {
-    const lux = getState(`zigbee.0.${WZ_MOTION_DEV}.illuminance`).val;
+    // (2) Party-Override: Lichtsteuerung manuell überschrieben → nichts tun.
+    if (getState(MANUAL_OVERRIDE).val === true) {
+        log(`Wohnzimmer-Bewegung erkannt, aber _manual=true (Party-Modus) — Eintracht-Logo bleibt aus`, 'info');
+        return;
+    }
+    // (1) Außerhalb des Nacht-Fensters macht das Logo via Astro seine Sache.
+    if (!isNightHours()) {
+        log(`Wohnzimmer-Bewegung außerhalb Nacht-Fenster (Stunde ${new Date().getHours()}) — Eintracht-Logo bleibt aus`, 'debug');
+        return;
+    }
+    // (3) Lux mit Fallback holen.
+    const lux = getWzLux();
+    // (4) Fail-closed bei fehlendem Wert.
+    if (lux === null) {
+        log(`Wohnzimmer-Bewegung nachts, aber kein Lux-Wert verfügbar — fail-closed, Eintracht-Logo bleibt aus`, 'warn');
+        return;
+    }
     if (lux > NIGHTLIGHT_LUX) {
-        log(`Wohnzimmer-Bewegung erkannt, aber zu hell (${lux} lx) — Eintracht-Logo bleibt aus`, 'debug');
+        log(`Wohnzimmer-Bewegung nachts erkannt, aber zu hell (${lux} lx) — Eintracht-Logo bleibt aus`, 'debug');
         return;
     }
     log(`Wohnzimmer-Nachtbewegung (${lux} lx) — Eintracht-Logo 60s an`, 'info');
