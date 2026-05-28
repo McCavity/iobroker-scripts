@@ -183,5 +183,5 @@ schedule(SCHEDULE_CRON, runBatteryCheck);
 // nächsten vollen Stunde zu warten.
 runBatteryCheck();
 
-log('erinnerungen.battery_check geladen — JS-Version, defensive Klasse-2-PME', 'info');
+log('erinnerungen.battery-check geladen — JS-Version, defensive Klasse-2-PME', 'info');
 

@@ -144,6 +144,8 @@ onSwitch('00158d000ab7850f', 'Wohnzimmer Couchtisch', {
 //       3. Lux-State-Fallback: `illuminance` (Vor-Re-Pair-Name) ODER
 //          `illuminance_raw` (nach 2026-05-27 Re-Pair / ZigBee-Adapter-Update)
 //       4. Fail-closed wenn beide States fehlen oder undefined sind
+//       5. Auto-Off respektiert Ownership-Transfer: Wenn der 60s-Timer über
+//          05:00 hinaus läuft, hat das Astro-Tag-Skript übernommen → kein Off
 //
 //     Bug-Historie:
 //       2026-05-27 — `getState(...illuminance).val` lieferte `undefined` nach
@@ -151,6 +153,10 @@ onSwitch('00158d000ab7850f', 'Wohnzimmer Couchtisch', {
 //       `undefined > 15` ist `false` in JS, der Lux-Check schlug fehl, das
 //       Logo ging tagsüber an. Plus: das Zeitfenster war im Skript nie
 //       umgesetzt — Use-Case-Kommentar sprach nur von "dunkel".
+//       2026-05-28 — Ownership-Transfer-Konflikt am Morgenende: Bewegung um
+//       04:59:xx → 60s-Timer läuft bis ~05:00:xx → Astro hat um 05:00:00
+//       das Logo via Tag-Schaltung übernommen, aber der Timer schaltete es
+//       fälschlich wieder aus. Fix: isNightHours()-Check im setTimeout.
 // ---------------------------------------------------------------------------
 const WZ_MOTION_DEV     = '00158d0007c62b1b';
 const EINTRACHT_LOGO    = 'sonoff.0.Eintracht Logo.POWER';
@@ -209,6 +215,15 @@ on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, val: true, change: 'ne' }, () =>
     setState(EINTRACHT_LOGO, true);
     if (eintrachtTimeout) clearTimeout(eintrachtTimeout);
     eintrachtTimeout = setTimeout(() => {
+        // Wenn der Timer über 05:00 hinaus läuft, hat das Astro-Tag-Skript
+        // (scenes-lighting-everyday) inzwischen die Ownership übernommen —
+        // nicht ausschalten, sonst kippt das Logo nach dem morgendlichen
+        // Astro-Einschalten fälschlich wieder aus.
+        if (!isNightHours()) {
+            log('Eintracht-Logo Auto-Off übersprungen — Nacht-Fenster vorbei (Astro hat übernommen)', 'info');
+            eintrachtTimeout = null;
+            return;
+        }
         setState(EINTRACHT_LOGO, false);
         eintrachtTimeout = null;
     }, NIGHTLIGHT_TIME);
@@ -218,4 +233,3 @@ on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, val: true, change: 'ne' }, () =>
 //  Initialisierungs-Log
 // ============================================================================
 log('scenes.lighting.smart-switches geladen — 7 Switches + 1 Motion-Trigger aktiv', 'info');
-
