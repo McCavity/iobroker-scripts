@@ -9,3 +9,7 @@ Thumbs.db
 
 # Lokale Experimente
 *.local
+
+# git worktrees (local-only isolation)
+.worktrees/
+.worktrees
