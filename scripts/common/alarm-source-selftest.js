@@ -1,6 +1,6 @@
 /* iobroker-scripts-export
- * id:         script.js.common.alarm-source-test
- * name:       alarm-source-test
+ * id:         script.js.common.alarm-source-selftest
+ * name:       alarm-source-selftest
  * engineType: Javascript/js
  * enabled:    true
  * expert:     true
