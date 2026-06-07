@@ -76,3 +76,63 @@ test('computeSignaltower: alle acked → AMBER on', () => {
 test('computeSignaltower: leer → off', () => {
   assert.deepEqual(C.computeSignaltower([]), {mode:'off'});
 });
+
+const TS = '2026-06-07T08:15:03Z';
+
+test('buildList: Vertrags-Form', () => {
+  const p = C.buildList('werkstatt', [{id:'a',host:'TEST',name:'n',severity:'warning',summary:'s',since:TS}], TS);
+  assert.equal(p.schema_version, 1);
+  assert.equal(p.device_id, 'werkstatt');
+  assert.equal(p.count, 1);
+  assert.equal(p.max_severity, 'warning');
+  assert.deepEqual(p.alarms[0], {id:'a',host:'TEST',name:'n',severity:'warning',summary:'s',since:TS,runbook_url:null});
+});
+
+test('buildNew: null wenn keine attention, sonst count+max', () => {
+  assert.equal(C.buildNew([], TS), null);
+  assert.deepEqual(C.buildNew([{severity:'critical'}], TS), {schema_version:1, ts:TS, count_new:1, max_severity:'critical'});
+});
+
+test('computeOutputs: Test-Alarm fired → fast_blink, new gesetzt, Test-Telegram 🔔', () => {
+  const r = C.computeOutputs({alarms:[]}, {test:[{id:'t1',host:'TEST',name:'Selbsttest',severity:'warning',since:TS}]},
+    {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
+  assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
+  assert.ok(r.mqtt.new && r.mqtt.new.count_new === 1);
+  assert.equal(r.telegrams.length, 1);
+  assert.match(r.telegrams[0], /🔔.*warning/);
+  assert.equal(r.state.alarms[0].acked, false);
+});
+
+test('computeOutputs: ack → signaltower on, kein new', () => {
+  const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:false}]};
+  const r = C.computeOutputs(prev, {test:[{id:'t1',host:'TEST',name:'n',severity:'warning'}]},
+    {ack:true, mode:'normal', ts:TS, deviceId:'werkstatt'});
+  assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'on'});
+  assert.equal(r.mqtt.new, null);
+});
+
+test('computeOutputs: Test-Alarm resolved → off, Test-Telegram ✅', () => {
+  const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:false}]};
+  const r = C.computeOutputs(prev, {test:[]}, {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
+  assert.deepEqual(r.signaltower, {mode:'off'});
+  assert.equal(r.telegrams.length, 1);
+  assert.match(r.telegrams[0], /✅/);
+});
+
+test('computeOutputs: Eskalation warning→critical → erneute attention + Telegram', () => {
+  const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:true}]};
+  const r = C.computeOutputs(prev, {test:[{id:'t1',host:'TEST',name:'n',severity:'critical'}]},
+    {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
+  assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
+  assert.equal(r.mqtt.new.count_new, 1);
+  assert.match(r.telegrams[0], /eskaliert auf critical/);
+});
+
+test('computeOutputs: mode=away unterdrückt signaltower + new, Telegram bleibt, state aktualisiert', () => {
+  const r = C.computeOutputs({alarms:[]}, {test:[{id:'t1',host:'TEST',name:'n',severity:'warning',since:TS}]},
+    {ack:false, mode:'away', ts:TS, deviceId:'werkstatt'});
+  assert.deepEqual(r.signaltower, {mode:'off'});
+  assert.equal(r.mqtt.new, null);
+  assert.equal(r.telegrams.length, 1);
+  assert.equal(r.state.alarms.length, 1);
+});

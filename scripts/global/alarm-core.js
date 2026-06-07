@@ -54,6 +54,57 @@ function computeSignaltower(alarms) {
   return { mode: 'off' };
 }
 
+function buildList(deviceId, alarms, ts) {
+  return {
+    schema_version: SCHEMA_VERSION, device_id: deviceId, ts,
+    count: alarms.length, max_severity: maxSeverity(alarms),
+    alarms: alarms.map(a => ({
+      id: a.id, host: a.host, name: a.name, severity: a.severity,
+      summary: a.summary || '', since: a.since || ts, runbook_url: a.runbook_url || null,
+    })),
+  };
+}
+
+function buildNew(attention, ts) {
+  if (!attention.length) return null;
+  return { schema_version: SCHEMA_VERSION, ts, count_new: attention.length, max_severity: maxSeverity(attention) };
+}
+
+function buildTestTelegram(kind, alarm) {
+  const sev = alarm ? alarm.severity : '';
+  if (kind === 'fired')     return `🔔 TEST-Alarm (${sev}) ausgelöst — Selbsttest Alarmkette`;
+  if (kind === 'escalated') return `🔔 TEST-Alarm eskaliert auf ${sev}`;
+  if (kind === 'resolved')  return `✅ TEST-Alarm Entwarnung — Selbsttest beendet`;
+  return '';
+}
+
+// Integration: prev-State + Quellen + Ack + Mode → { state, signaltower, mqtt, telegrams }.
+// Mode-Hook: away/maintenance unterdrücken physische/hörbare Ausgänge (signaltower + new-Beep),
+// Test-Telegram + state-Wahrheit bleiben.
+function computeOutputs(prevState, sourcesMap, opts) {
+  const ts = opts.ts, deviceId = opts.deviceId, mode = opts.mode || 'normal';
+  const prevAlarms = (prevState && prevState.alarms) || [];
+  const merged = mergeSources(sourcesMap);
+  let { alarms, attention, resolved } = reconcile(prevAlarms, merged);
+  if (opts.ack) alarms = applyAck(alarms);
+  const telegrams = [];
+  for (const a of attention) if (a.source === 'test') {
+    const wasPresent = prevAlarms.some(p => p.id === a.id);
+    telegrams.push(buildTestTelegram(wasPresent ? 'escalated' : 'fired', a));
+  }
+  for (const a of resolved) if (a.source === 'test') telegrams.push(buildTestTelegram('resolved', a));
+  const physical = (mode === 'normal');
+  return {
+    state: { alarms },
+    signaltower: physical ? computeSignaltower(alarms) : { mode: 'off' },
+    mqtt: { list: buildList(deviceId, alarms, ts), new: physical ? buildNew(attention, ts) : null },
+    telegrams,
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile, applyAck, computeSignaltower };
+  module.exports = {
+    SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
+    computeSignaltower, buildList, buildNew, buildTestTelegram, computeOutputs,
+  };
 }
