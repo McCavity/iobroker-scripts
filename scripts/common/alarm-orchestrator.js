@@ -6,11 +6,12 @@
  * expert:     true
  */
 // Orchestrator: sources.* + ack + mode → computeOutputs (Global alarm-core)
-// → Signaltower (Global signaltower-helpers) + Test-Telegram + state.
+// → Signaltower (Global signaltower-helpers) + rote Rundumleuchte + Test-Telegram + state.
 const DP = '0_userdata.0.alerting.';
 const DEVICE_ID = 'werkstatt';            // TODO Umsetzung: finalen Standort setzen
 const SOURCES = ['test', 'grafana'];      // 'grafana' erst mit Slice 3 aktiv
 const PERSIST = -1;                        // rbhapp01: duration -1 = dauerhaft bis nächstes Signal
+const SONOFF_BEACON = 'sonoff.0.Alarm.POWER';  // rote Rundumleuchte — folgt dem Signaltower-fast_blink
 
 let currentState = { alarms: [] };         // im Speicher (spart getState aufs state-DP)
 
@@ -39,6 +40,17 @@ function driveSignaltower(st) {
   if (st.mode === 'off') signal('AMBER', 'off');
   else signal(st.colour, st.mode, PERSIST);
 }
+// Rote Rundumleuchte folgt dem Signaltower: AN nur bei sichtbar blinkendem Tower
+// (st.mode === 'fast_blink' = unacked Alarm UND mode=normal). Bei Ack (solid),
+// Entwarnung (off) und in away/maintenance (Tower unterdrückt) → aus. st ist der
+// bereits mode-unterdrückte Signaltower-Output aus computeOutputs.
+// Nur bei Wertänderung schreiben — sonst republished der Sonoff-Adapter jeden drive().
+function driveBeacon(st) {
+  if (!existsState(SONOFF_BEACON)) return;
+  const want = st.mode === 'fast_blink';
+  const cur = (getState(SONOFF_BEACON) || {}).val;
+  if (cur !== want) setState(SONOFF_BEACON, want);
+}
 
 function drive(ackPressed) {
   const out = computeOutputs(currentState, readSources(),
@@ -46,6 +58,7 @@ function drive(ackPressed) {
   currentState = out.state;
   setState(DP + 'state', JSON.stringify(out.state), true);
   driveSignaltower(out.signaltower);
+  driveBeacon(out.signaltower);
   out.telegrams.forEach(msg => sendTo('telegram.0', { text: msg }));
   // MQTT-Publish: Slice 2 (hier bewusst noch nicht).
   log('alarm-orchestrator: ' + out.state.alarms.length + ' Alarm(e), ST=' + JSON.stringify(out.signaltower)

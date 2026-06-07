@@ -10,14 +10,35 @@
 
 const BLINK_CMD = '/home/iobuser/blink-venv/bin/python /home/iobuser/blink_control.py';
 
+function blinkNotify(text) {
+    // Telegram-Warnung (gleiches Muster wie alarm-orchestrator)
+    sendTo('telegram.0', { text: `⚠️ Blink: ${text}` });
+}
+
 function blinkSet(action) {
     // action = 'arm' oder 'disarm'
+    const want = action === 'arm' ? 'armed' : 'disarmed';
+    // Timeout grosszuegig: blinkpy-Login (~30-60s) + interne Verify-Retries
+    // in blink_control.py (Backoff 3s+6s). 30s waere zu knapp.
     // @ts-expect-error: ioBroker type defs don't include options arg
-    exec(`${BLINK_CMD} ${action} Außen`, { timeout: 30000 }, (err, stdout, stderr) => {
+    exec(`${BLINK_CMD} ${action} Außen`, { timeout: 120000 }, (err, stdout, stderr) => {
+        const out = (stdout || '').trim();
+        const errOut = (stderr || '').trim();
         if (err) {
-            log(`blink ${action} Außen FAILED: ${err.message} | stderr=${stderr}`, 'error');
-        } else {
-            log(`blink ${action} Außen ok: ${stdout.trim()}`);
+            // exit != 0 = blink_control.py konnte den Zustand NICHT bestaetigen
+            // (Soll/Ist-Mismatch nach Retry, Auth-/API-Fehler oder Timeout).
+            log(`blink ${action} Außen FAILED: ${err.message} | stdout=${out} | stderr=${errOut}`, 'error');
+            blinkNotify(`${action} Außen fehlgeschlagen — Kameras evtl. im falschen Zustand! ${errOut || out || err.message}`);
+            return;
+        }
+        log(`blink ${action} Außen ok: ${out}`);
+        // Belt-and-suspenders: gemeldeten Zustand gegen die Absicht pruefen,
+        // auch bei exit 0. ("armed" ist Teilstring von "disarmed" => exakt matchen.)
+        const m = out.match(/:\s*(armed|disarmed)\s*$/);
+        const state = m ? m[1] : null;
+        if (state !== want) {
+            log(`blink ${action} Außen MISMATCH: erwartet "${want}", gemeldet "${state}" (stdout="${out}")`, 'error');
+            blinkNotify(`${action} Außen meldet "${state}" statt "${want}" — bitte pruefen.`);
         }
     });
 }

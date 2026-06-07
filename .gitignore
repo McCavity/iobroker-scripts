@@ -9,3 +9,11 @@ Thumbs.db
 
 # Lokale Experimente
 *.local
+
+# git worktrees (local-only isolation)
+.worktrees/
+.worktrees
+
+# Python bytecode
+__pycache__/
+*.pyc
