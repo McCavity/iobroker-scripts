@@ -13,3 +13,7 @@ Thumbs.db
 # git worktrees (local-only isolation)
 .worktrees/
 .worktrees
+
+# Python bytecode
+__pycache__/
+*.pyc
