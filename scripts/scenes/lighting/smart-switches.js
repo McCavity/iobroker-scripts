@@ -35,13 +35,19 @@ function toggle(stateId) {
 
 // ---------------------------------------------------------------------------
 //  Helper: Alarm-ACK
-//  Sendet via signaltower-helpers (global script) das Amber-Blink-Signal an
-//  den Signaltower. Sobald die echte Alarm-Infrastruktur steht, hier zusätzlich
-//  den State-Write für die Alarm-Quittung ergänzen (z.B. setState auf einen
-//  0_userdata.0.alarm.ack-Datenpunkt).
+//  Schreibt 0_userdata.0.alerting.ack=true → der alarm-orchestrator quittiert
+//  den aktiven Alarm (Signaltower fast_blink → solid) und setzt den Button selbst
+//  zurück. Damit ist jeder Switch-Doppelklick ein generischer Quittierungspunkt.
+//  Ersetzt das alte signalAlarm()-3s-Blink: der Signaltower wird jetzt vom
+//  Orchestrator besessen, ein separates Blinken würde nur kollidieren.
 // ---------------------------------------------------------------------------
 function ackAlarm(source) {
-    signalAlarm();  // aus script.js.global.signaltower-helpers → 3s Amber blink
+    const ackId = '0_userdata.0.alerting.ack';
+    if (existsState(ackId)) {
+        setState(ackId, true);
+    } else {
+        log(`Alarm-ACK von '${source}': ${ackId} fehlt — alarm-orchestrator geladen?`, 'warn');
+    }
     log(`Alarm-ACK von '${source}'`, 'info');
 }
 
