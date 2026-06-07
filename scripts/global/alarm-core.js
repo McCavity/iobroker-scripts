@@ -46,6 +46,14 @@ function reconcile(prevAlarms, mergedAlarms) {
   return { alarms, attention, resolved };
 }
 
+function applyAck(alarms) { return alarms.map(a => Object.assign({}, a, { acked: true })); }
+
+function computeSignaltower(alarms) {
+  if (alarms.some(a => !a.acked)) return { colour: 'AMBER', mode: 'fast_blink' };
+  if (alarms.length > 0) return { colour: 'AMBER', mode: 'on' };
+  return { mode: 'off' };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile };
+  module.exports = { SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile, applyAck, computeSignaltower };
 }

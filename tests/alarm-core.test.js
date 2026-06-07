@@ -61,3 +61,18 @@ test('reconcile: entfernter Alarm → resolved', () => {
   assert.deepEqual(r.alarms, []);
   assert.deepEqual(r.resolved.map(a=>a.id), ['a']);
 });
+
+test('applyAck: setzt acked=true auf alle', () => {
+  const out = C.applyAck([{id:'a',acked:false},{id:'b',acked:false}]);
+  assert.ok(out.every(a => a.acked === true));
+});
+
+test('computeSignaltower: unacked → AMBER fast_blink', () => {
+  assert.deepEqual(C.computeSignaltower([{id:'a',acked:false}]), {colour:'AMBER', mode:'fast_blink'});
+});
+test('computeSignaltower: alle acked → AMBER on', () => {
+  assert.deepEqual(C.computeSignaltower([{id:'a',acked:true}]), {colour:'AMBER', mode:'on'});
+});
+test('computeSignaltower: leer → off', () => {
+  assert.deepEqual(C.computeSignaltower([]), {mode:'off'});
+});
