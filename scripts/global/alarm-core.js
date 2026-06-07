@@ -29,6 +29,23 @@ function mergeSources(sourcesMap) {
   return out;
 }
 
+// Überträgt Ack-Zustand aus prev auf die neue Menge; erkennt Eskalation (acked-Reset)
+// und Resolve (in prev, nicht mehr in new).
+function reconcile(prevAlarms, mergedAlarms) {
+  const prevById = new Map((prevAlarms || []).map(a => [a.id, a]));
+  const newIds = new Set(mergedAlarms.map(a => a.id));
+  const attention = [];
+  const alarms = mergedAlarms.map(a => {
+    const prev = prevById.get(a.id);
+    if (!prev) { attention.push(a); return Object.assign({}, a, { acked: false }); }
+    const escalated = severityRank(a.severity) > severityRank(prev.severity);
+    if (escalated) attention.push(a);
+    return Object.assign({}, a, { acked: escalated ? false : !!prev.acked });
+  });
+  const resolved = (prevAlarms || []).filter(a => !newIds.has(a.id));
+  return { alarms, attention, resolved };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { SCHEMA_VERSION, severityRank, maxSeverity, mergeSources };
+  module.exports = { SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile };
 }

@@ -26,3 +26,38 @@ test('mergeSources: flattens, tags source, sorts critical-first then since-asc',
   assert.equal(merged[0].source, 'grafana');
   assert.equal(merged[2].source, 'test');
 });
+
+test('reconcile: neuer Alarm → unacked + attention', () => {
+  const r = C.reconcile([], [{id:'a', severity:'warning'}]);
+  assert.equal(r.alarms[0].acked, false);
+  assert.deepEqual(r.attention.map(a=>a.id), ['a']);
+  assert.deepEqual(r.resolved, []);
+});
+
+test('reconcile: bestehender acked Alarm bleibt acked, keine attention', () => {
+  const prev = [{id:'a', severity:'warning', acked:true}];
+  const r = C.reconcile(prev, [{id:'a', severity:'warning'}]);
+  assert.equal(r.alarms[0].acked, true);
+  assert.deepEqual(r.attention, []);
+});
+
+test('reconcile: Eskalation warning→critical setzt acked zurück + attention', () => {
+  const prev = [{id:'a', severity:'warning', acked:true}];
+  const r = C.reconcile(prev, [{id:'a', severity:'critical'}]);
+  assert.equal(r.alarms[0].acked, false);
+  assert.deepEqual(r.attention.map(a=>a.id), ['a']);
+});
+
+test('reconcile: Deeskalation critical→warning lässt acked bestehen', () => {
+  const prev = [{id:'a', severity:'critical', acked:true}];
+  const r = C.reconcile(prev, [{id:'a', severity:'warning'}]);
+  assert.equal(r.alarms[0].acked, true);
+  assert.deepEqual(r.attention, []);
+});
+
+test('reconcile: entfernter Alarm → resolved', () => {
+  const prev = [{id:'a', severity:'warning', acked:false}];
+  const r = C.reconcile(prev, []);
+  assert.deepEqual(r.alarms, []);
+  assert.deepEqual(r.resolved.map(a=>a.id), ['a']);
+});
