@@ -8,10 +8,12 @@
 // Orchestrator: sources.* + ack + mode → computeOutputs (Global alarm-core)
 // → Signaltower (Global signaltower-helpers) + rote Rundumleuchte + Test-Telegram + state.
 const DP = '0_userdata.0.alerting.';
-const DEVICE_ID = 'werkstatt';            // TODO Umsetzung: finalen Standort setzen
-const SOURCES = ['test', 'grafana'];      // 'grafana' erst mit Slice 3 aktiv
+const DEVICE_ID = 'office';                // Standort des Buttons (Slice 2: war 'werkstatt')
+const SOURCES = ['test', 'grafana'];      // beide Quellen aktiv
 const PERSIST = -1;                        // rbhapp01: duration -1 = dauerhaft bis nächstes Signal
 const SONOFF_BEACON = 'sonoff.0.Alarm.POWER';  // rote Rundumleuchte — folgt dem Signaltower-fast_blink
+const MQTT_TOPIC = 'alarmbutton/' + DEVICE_ID + '/';    // Slice 2: Publish via mqtt.0-Messagebox (sendMessage2Client)
+const HEARTBEAT_MS = 15000;                // Slice 2: Lebenszeichen + list-Republish (retain=false-Workaround)
 
 let currentState = { alarms: [] };         // im Speicher (spart getState aufs state-DP)
 
@@ -52,6 +54,24 @@ function driveBeacon(st) {
   if (cur !== want) setState(SONOFF_BEACON, want);
 }
 
+// Slice 2: publish via mqtt.0-Messagebox. Ein Skript darf NICHT in den fremden
+// mqtt.0.*-Namespace createState-en (State bleibt leer, kein Publish) — verifiziert
+// 27.06. Der dokumentierte Weg ist sendMessage2Client (gegen den Prod-Broker getestet).
+function publishMqtt(leg, payload) {
+  sendTo('mqtt.0', 'sendMessage2Client', { topic: MQTT_TOPIC + leg, message: JSON.stringify(payload) });
+}
+
+// Lebenszeichen (Contract §3.3) + list-Republish, damit ein frisch gebooteter Button
+// binnen HEARTBEAT_MS den aktuellen Stand bekommt (kompensiert retain=false).
+function publishHeartbeat() {
+  const grafanaOk = existsState(DP + 'grafana.ok') ? !!(getState(DP + 'grafana.ok') || {}).val : false;
+  const lastOk = existsState(DP + 'grafana.last_ok') ? (getState(DP + 'grafana.last_ok') || {}).val : null;
+  const ts = new Date().toISOString();
+  const ageS = lastOk ? Math.round((Date.now() - new Date(lastOk).getTime()) / 1000) : null;
+  publishMqtt('heartbeat', buildHeartbeat(grafanaOk, ageS, ts));
+  publishMqtt('list', buildList(DEVICE_ID, currentState.alarms, ts));
+}
+
 function drive(ackPressed) {
   const out = computeOutputs(currentState, readSources(),
     { ack: !!ackPressed, mode: readMode(), ts: new Date().toISOString(), deviceId: DEVICE_ID });
@@ -60,7 +80,9 @@ function drive(ackPressed) {
   driveSignaltower(out.signaltower);
   driveBeacon(out.signaltower);
   out.telegrams.forEach(msg => sendTo('telegram.0', { text: msg }));
-  // MQTT-Publish: Slice 2 (hier bewusst noch nicht).
+  // MQTT-Publish (Slice 2): list bei jeder Änderung, new nur bei neuer/eskalierter Attention.
+  publishMqtt('list', out.mqtt.list);
+  if (out.mqtt.new) publishMqtt('new', out.mqtt.new);
   log('alarm-orchestrator: ' + out.state.alarms.length + ' Alarm(e), ST=' + JSON.stringify(out.signaltower)
     + (out.telegrams.length ? ', TG=' + out.telegrams.length : ''));
 }
@@ -72,6 +94,8 @@ function ready() {
   on({ id: DP + 'ack', val: true }, () => { drive(true); setState(DP + 'ack', false, true); });
   on({ id: DP + 'mode' }, () => drive(false));
   drive(false);   // initialer Reconcile gegen die aktuellen Quellen
+  setInterval(publishHeartbeat, HEARTBEAT_MS);  // Slice 2: periodisches Lebenszeichen + list-Republish
+  publishHeartbeat();                            // sofort ein erstes Lebenszeichen
   log('alarm-orchestrator bereit');
 }
 setTimeout(ready, 2000);
