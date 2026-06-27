@@ -136,3 +136,21 @@ test('computeOutputs: mode=away unterdrückt signaltower + new, Telegram bleibt,
   assert.equal(r.telegrams.length, 1);
   assert.equal(r.state.alarms.length, 1);
 });
+
+test('buildHeartbeat: Contract §3.3 — schema_version, ts, grafana_ok, poll_age_s', () => {
+  assert.deepEqual(C.buildHeartbeat(true, 2, TS), {
+    schema_version: C.SCHEMA_VERSION, ts: TS, grafana_ok: true, poll_age_s: 2,
+  });
+});
+
+test('buildHeartbeat: grafana_ok false wird durchgereicht (Stale-Signal)', () => {
+  const hb = C.buildHeartbeat(false, 47, TS);
+  assert.equal(hb.grafana_ok, false);
+  assert.equal(hb.poll_age_s, 47);
+});
+
+test('buildHeartbeat: poll_age_s wird zu ganzer Zahl normalisiert, fehlend → null', () => {
+  assert.equal(C.buildHeartbeat(true, 2.9, TS).poll_age_s, 2);
+  assert.equal(C.buildHeartbeat(true, null, TS).poll_age_s, null);
+  assert.equal(C.buildHeartbeat(true, undefined, TS).poll_age_s, null);
+});

@@ -70,6 +70,16 @@ function buildNew(attention, ts) {
   return { schema_version: SCHEMA_VERSION, ts, count_new: attention.length, max_severity: maxSeverity(attention) };
 }
 
+// Contract §3.3 — Lebenszeichen + Poll-Status. poll_age_s aus dem Grafana-Poll
+// (Slice 3: grafana.ok + Sekunden seit grafana.last_ok). Fehlend → null (nie raten).
+function buildHeartbeat(grafanaOk, pollAgeS, ts) {
+  return {
+    schema_version: SCHEMA_VERSION, ts,
+    grafana_ok: !!grafanaOk,
+    poll_age_s: (typeof pollAgeS === 'number' && isFinite(pollAgeS)) ? Math.floor(pollAgeS) : null,
+  };
+}
+
 function buildTestTelegram(kind, alarm) {
   const sev = alarm ? alarm.severity : '';
   if (kind === 'fired')     return `🔔 TEST-Alarm (${sev}) ausgelöst — Selbsttest Alarmkette`;
@@ -105,6 +115,6 @@ function computeOutputs(prevState, sourcesMap, opts) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
-    computeSignaltower, buildList, buildNew, buildTestTelegram, computeOutputs,
+    computeSignaltower, buildList, buildNew, buildHeartbeat, buildTestTelegram, computeOutputs,
   };
 }
