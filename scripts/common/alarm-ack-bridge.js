@@ -41,15 +41,15 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { parseAckPayload };
 } else {
   // ===================== ioBroker-Adapter =====================
-  // Wildcard-Subscription (pattern-basiert): fängt den State auch dann, wenn der mqtt.0-Broker
-  // ihn erst beim ERSTEN Button-Publish anlegt — kein "non-existent state"-Warning wie bei
-  // exakter id. Eng genug, um die btn_*-Wandschalter (mqtt.0.button.*) nicht zu treffen.
-  const SUB_PATTERN = 'mqtt.0.alarmbutton.*.ack';
+  // Exakte State-id statt Wildcard: on({id:'mqtt.0.alarmbutton.*.ack'}) hat in dieser
+  // javascript-Adapter-Version NICHT gefeuert (2026-06-28 am echten System verifiziert,
+  // auch mit bereits existierendem State). Erprobtes Muster hier (smart-switches.js) ist
+  // die exakte id — wie on({id:'zigbee.0.<dev>.action', change:'ne'}).
+  const DEVICE_ID = 'office';
+  const ACK_STATE = 'mqtt.0.alarmbutton.' + DEVICE_ID + '.ack';
   const TARGET = '0_userdata.0.alerting.ack';   // Orchestrator-Ack-DP (= Wandschalter-Pfad)
 
-  // Single-Device (office): heute existiert genau ein alerting-Baum, daher routet jeder
-  // alarmbutton-Ack auf den einen TARGET. Multi-Device (per-Gerät-Baum) = Phase 1b+.
-  on({ id: SUB_PATTERN, change: 'ne' }, (obj) => {
+  on({ id: ACK_STATE, change: 'ne' }, (obj) => {
     const raw = obj && obj.state ? obj.state.val : null;
     const parsed = parseAckPayload(raw);
     if (!parsed.valid) {
@@ -64,5 +64,5 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   });
 
-  log('alarm-ack-bridge bereit — hört auf ' + SUB_PATTERN);
+  log('alarm-ack-bridge bereit — hört auf ' + ACK_STATE);
 }
