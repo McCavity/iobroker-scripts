@@ -5,20 +5,19 @@
  * enabled:    true
  * expert:     true
  */
-// Phase 1a — Brücke: Button-Ack vom MQTT-Broker → Orchestrator-Ack-Datenpunkt.
+// Phase 1b — Brücke: Button-Ack vom MQTT-Broker → Orchestrator-Ack-Datenpunkt(e).
 //
 // Der Alarm-Button publisht alarmbutton/<device>/ack. Der mqtt.0-Server-Adapter legt
 // eingehende Client-Topics als Punkt-Pfad-States ab (verifiziert an den ButtonPlus-
 // Wandschaltern: button/btn_fa21e8/3-1/click → mqtt.0.button.btn_fa21e8.3-1.click).
 // Also landet der Ack als State mqtt.0.alarmbutton.<device>.ack (Payload = JSON-String).
 //
-// Dieser Handler parst den Payload und triggert den BESTEHENDEN Ack-Datenpunkt des
-// Orchestrators (0_userdata.0.alerting.ack) — exakt derselbe Pfad wie der Wandschalter-Ack.
-// Der Orchestrator (on {val:true}) macht daraus applyAck (alle acked) und setzt den DP
-// selbst wieder auf false zurück.
-//
-// ack_all → boolean-DP 0_userdata.0.alerting.ack (Wandschalter-Pfad). ack_one (mit id) →
-// String-DP 0_userdata.0.alerting.ack_one (Phase 1b). ack_one ohne id wird verworfen.
+// Dieser Handler parst den Payload und triggert je nach action den passenden DP:
+//   ack_all → boolean-DP 0_userdata.0.alerting.ack (= exakt der Wandschalter-Pfad). Der
+//             Orchestrator (on {val:true}) macht daraus applyAck (alle acked) + Reset.
+//   ack_one (mit id) → String-DP 0_userdata.0.alerting.ack_one (Phase 1b). Der Orchestrator
+//             quittiert genau diesen Fingerprint (applyAck(alarms, id)) + Reset.
+//   ack_one OHNE id → verworfen (kein Fallback auf ack_all, würde über-quittieren).
 //
 // ACK = "gesehen", KEIN Grafana-Silence (der Grafana-Poll verwirft suppressed Alarme →
 // ein Silence würde den acked Alarm aus der Liste tilgen; siehe mqtt-contract §3.4).
