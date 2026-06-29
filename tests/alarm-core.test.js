@@ -179,3 +179,29 @@ test('applyAck(leere/fehlende id): rückwärtskompatibel → alle acked', () => 
   assert.ok(C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], '').every(a => a.acked === true));
   assert.ok(C.applyAck([{id:'a',acked:false}], undefined).every(a => a.acked === true));
 });
+
+test('computeOutputs: ackId → nur der eine Alarm acked, fast_blink bleibt', () => {
+  const prev = {alarms:[
+    {id:'a',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+    {id:'b',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+  ]};
+  const r = C.computeOutputs(prev, {grafana:[
+    {id:'a',host:'H',name:'n',severity:'warning'},
+    {id:'b',host:'H',name:'n',severity:'warning'},
+  ]}, {ackId:'a', mode:'normal', ts:TS, deviceId:'office'});
+  assert.equal(r.state.alarms.find(x => x.id === 'a').acked, true);
+  assert.equal(r.state.alarms.find(x => x.id === 'b').acked, false);
+  assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
+});
+test('computeOutputs: ackId hat Präzedenz vor ack (nur der eine, nicht alle)', () => {
+  const prev = {alarms:[
+    {id:'a',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+    {id:'b',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+  ]};
+  const r = C.computeOutputs(prev, {grafana:[
+    {id:'a',host:'H',name:'n',severity:'warning'},
+    {id:'b',host:'H',name:'n',severity:'warning'},
+  ]}, {ack:true, ackId:'a', mode:'normal', ts:TS, deviceId:'office'});
+  assert.equal(r.state.alarms.find(x => x.id === 'a').acked, true);
+  assert.equal(r.state.alarms.find(x => x.id === 'b').acked, false);
+});

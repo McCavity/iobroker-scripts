@@ -104,7 +104,9 @@ function computeOutputs(prevState, sourcesMap, opts) {
   const prevAlarms = (prevState && prevState.alarms) || [];
   const merged = mergeSources(sourcesMap);
   let { alarms, attention, resolved } = reconcile(prevAlarms, merged);
-  if (opts.ack) alarms = applyAck(alarms);
+  // Präzedenz: opts.ackId (Einzel, Phase 1b) vor opts.ack (alle). Beide leer → kein Ack.
+  if (opts.ackId) alarms = applyAck(alarms, opts.ackId);
+  else if (opts.ack) alarms = applyAck(alarms);
   const telegrams = [];
   for (const a of attention) if (a.source === 'test') {
     const wasPresent = prevAlarms.some(p => p.id === a.id);
