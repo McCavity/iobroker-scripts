@@ -85,7 +85,18 @@ test('buildList: Vertrags-Form', () => {
   assert.equal(p.device_id, 'werkstatt');
   assert.equal(p.count, 1);
   assert.equal(p.max_severity, 'warning');
-  assert.deepEqual(p.alarms[0], {id:'a',host:'TEST',name:'n',severity:'warning',summary:'s',since:TS,runbook_url:null});
+  assert.deepEqual(p.alarms[0], {id:'a',host:'TEST',name:'n',severity:'warning',summary:'s',since:TS,runbook_url:null,acked:false});
+});
+
+test('buildList: acked-Flag wird durchgereicht (Contract §3.1, additiv) + fail-safe false', () => {
+  const p = C.buildList('office', [
+    {id:'a',host:'H',name:'n',severity:'critical',since:TS,acked:true},
+    {id:'b',host:'H',name:'n',severity:'warning',since:TS,acked:false},
+    {id:'c',host:'H',name:'n',severity:'warning',since:TS},   // acked fehlt → fail-safe false
+  ], TS);
+  assert.equal(p.alarms[0].acked, true);
+  assert.equal(p.alarms[1].acked, false);
+  assert.equal(p.alarms[2].acked, false);
 });
 
 test('buildNew: null wenn keine attention, sonst count+max', () => {

@@ -61,6 +61,7 @@ function buildList(deviceId, alarms, ts) {
     alarms: alarms.map(a => ({
       id: a.id, host: a.host, name: a.name, severity: a.severity,
       summary: a.summary || '', since: a.since || ts, runbook_url: a.runbook_url || null,
+      acked: !!a.acked,   // Contract §3.1 (additiv, schema bleibt 1): Button kennt den Quittier-Stand
     })),
   };
 }
