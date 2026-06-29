@@ -19,6 +19,7 @@ let currentState = { alarms: [] };         // im Speicher (spart getState aufs s
 
 // Datenpunkte idempotent anlegen (auch die sources, damit Reads nie ins Leere laufen)
 createState(DP + 'ack', false, { name: 'alerting ack', type: 'boolean', role: 'button', read: true, write: true });
+createState(DP + 'ack_one', '', { name: 'alerting ack_one', type: 'string', role: 'state', read: true, write: true });
 createState(DP + 'mode', 'normal', { name: 'alerting mode', type: 'string', role: 'state', read: true, write: true });
 createState(DP + 'state', '{"alarms":[]}', { name: 'alerting state', type: 'string', role: 'json', read: true, write: true });
 SOURCES.forEach(s => createState(DP + 'sources.' + s, '[]', { name: 'alerting sources.' + s, type: 'string', role: 'json', read: true, write: true }));
@@ -72,9 +73,9 @@ function publishHeartbeat() {
   publishMqtt('list', buildList(DEVICE_ID, currentState.alarms, ts));
 }
 
-function drive(ackPressed) {
+function drive(ackPressed, ackId) {
   const out = computeOutputs(currentState, readSources(),
-    { ack: !!ackPressed, mode: readMode(), ts: new Date().toISOString(), deviceId: DEVICE_ID });
+    { ack: !!ackPressed, ackId: ackId, mode: readMode(), ts: new Date().toISOString(), deviceId: DEVICE_ID });
   currentState = out.state;
   setState(DP + 'state', JSON.stringify(out.state), true);
   driveSignaltower(out.signaltower);
@@ -92,6 +93,12 @@ function ready() {
   currentState = readJson(DP + 'state', { alarms: [] });   // letzten Stand laden (Restart-fest)
   SOURCES.forEach(s => on({ id: DP + 'sources.' + s }, () => drive(false)));
   on({ id: DP + 'ack', val: true }, () => { drive(true); setState(DP + 'ack', false, true); });
+  on({ id: DP + 'ack_one', change: 'ne' }, () => {
+    const id = String((getState(DP + 'ack_one') || {}).val || '');
+    if (!id) return;                          // Reset-Schreibung ('') ignorieren
+    drive(false, id);
+    setState(DP + 'ack_one', '', true);       // Reset, analog zum ack→false
+  });
   on({ id: DP + 'mode' }, () => drive(false));
   drive(false);   // initialer Reconcile gegen die aktuellen Quellen
   setInterval(publishHeartbeat, HEARTBEAT_MS);  // Slice 2: periodisches Lebenszeichen + list-Republish

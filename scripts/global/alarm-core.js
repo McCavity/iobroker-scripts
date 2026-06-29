@@ -46,7 +46,14 @@ function reconcile(prevAlarms, mergedAlarms) {
   return { alarms, attention, resolved };
 }
 
-function applyAck(alarms) { return alarms.map(a => Object.assign({}, a, { acked: true })); }
+// id (optional): nicht-leerer String → nur dieser Alarm acked (Einzel-Quittierung, Phase 1b);
+// fehlend/leer → alle acked (ack_all, rückwärtskompatibel). Unbekannte id → No-op. Stets Kopien.
+function applyAck(alarms, id) {
+  const all = !(typeof id === 'string' && id);
+  return alarms.map(a => (all || a.id === id)
+    ? Object.assign({}, a, { acked: true })
+    : Object.assign({}, a));
+}
 
 function computeSignaltower(alarms) {
   if (alarms.some(a => !a.acked)) return { colour: 'AMBER', mode: 'fast_blink' };
@@ -97,7 +104,9 @@ function computeOutputs(prevState, sourcesMap, opts) {
   const prevAlarms = (prevState && prevState.alarms) || [];
   const merged = mergeSources(sourcesMap);
   let { alarms, attention, resolved } = reconcile(prevAlarms, merged);
-  if (opts.ack) alarms = applyAck(alarms);
+  // Präzedenz: opts.ackId (Einzel, Phase 1b) vor opts.ack (alle). Beide leer → kein Ack.
+  if (opts.ackId) alarms = applyAck(alarms, opts.ackId);
+  else if (opts.ack) alarms = applyAck(alarms);
   const telegrams = [];
   for (const a of attention) if (a.source === 'test') {
     const wasPresent = prevAlarms.some(p => p.id === a.id);

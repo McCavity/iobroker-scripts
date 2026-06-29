@@ -165,3 +165,43 @@ test('buildHeartbeat: poll_age_s wird zu ganzer Zahl normalisiert, fehlend → n
   assert.equal(C.buildHeartbeat(true, null, TS).poll_age_s, null);
   assert.equal(C.buildHeartbeat(true, undefined, TS).poll_age_s, null);
 });
+
+test('applyAck(id): nur der Match wird acked, übrige unverändert', () => {
+  const out = C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], 'a');
+  assert.equal(out.find(x => x.id === 'a').acked, true);
+  assert.equal(out.find(x => x.id === 'b').acked, false);
+});
+test('applyAck(unbekannte id): No-op, keiner acked', () => {
+  const out = C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], 'zzz');
+  assert.ok(out.every(a => a.acked === false));
+});
+test('applyAck(leere/fehlende id): rückwärtskompatibel → alle acked', () => {
+  assert.ok(C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], '').every(a => a.acked === true));
+  assert.ok(C.applyAck([{id:'a',acked:false}], undefined).every(a => a.acked === true));
+});
+
+test('computeOutputs: ackId → nur der eine Alarm acked, fast_blink bleibt', () => {
+  const prev = {alarms:[
+    {id:'a',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+    {id:'b',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+  ]};
+  const r = C.computeOutputs(prev, {grafana:[
+    {id:'a',host:'H',name:'n',severity:'warning'},
+    {id:'b',host:'H',name:'n',severity:'warning'},
+  ]}, {ackId:'a', mode:'normal', ts:TS, deviceId:'office'});
+  assert.equal(r.state.alarms.find(x => x.id === 'a').acked, true);
+  assert.equal(r.state.alarms.find(x => x.id === 'b').acked, false);
+  assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
+});
+test('computeOutputs: ackId hat Präzedenz vor ack (nur der eine, nicht alle)', () => {
+  const prev = {alarms:[
+    {id:'a',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+    {id:'b',host:'H',name:'n',severity:'warning',source:'grafana',acked:false},
+  ]};
+  const r = C.computeOutputs(prev, {grafana:[
+    {id:'a',host:'H',name:'n',severity:'warning'},
+    {id:'b',host:'H',name:'n',severity:'warning'},
+  ]}, {ack:true, ackId:'a', mode:'normal', ts:TS, deviceId:'office'});
+  assert.equal(r.state.alarms.find(x => x.id === 'a').acked, true);
+  assert.equal(r.state.alarms.find(x => x.id === 'b').acked, false);
+});
