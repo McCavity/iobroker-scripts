@@ -17,8 +17,8 @@
 // Der Orchestrator (on {val:true}) macht daraus applyAck (alle acked) und setzt den DP
 // selbst wieder auf false zurück.
 //
-// Phase 1a: nur action="ack_all" (der Orchestrator kann heute nur ack_all). action="ack_one"
-// (mit id) wird geloggt + ignoriert → Phase 1b (braucht Single-ID-Ack im Core).
+// ack_all → boolean-DP 0_userdata.0.alerting.ack (Wandschalter-Pfad). ack_one (mit id) →
+// String-DP 0_userdata.0.alerting.ack_one (Phase 1b). ack_one ohne id wird verworfen.
 //
 // ACK = "gesehen", KEIN Grafana-Silence (der Grafana-Poll verwirft suppressed Alarme →
 // ein Silence würde den acked Alarm aus der Liste tilgen; siehe mqtt-contract §3.4).
@@ -48,6 +48,7 @@ if (typeof module !== 'undefined' && module.exports) {
   const DEVICE_ID = 'office';
   const ACK_STATE = 'mqtt.0.alarmbutton.' + DEVICE_ID + '.ack';
   const TARGET = '0_userdata.0.alerting.ack';   // Orchestrator-Ack-DP (= Wandschalter-Pfad)
+  const ACK_ONE_TARGET = '0_userdata.0.alerting.ack_one';   // Einzel-Quittierung (Phase 1b)
 
   on({ id: ACK_STATE, change: 'ne' }, (obj) => {
     const raw = obj && obj.state ? obj.state.val : null;
@@ -59,8 +60,13 @@ if (typeof module !== 'undefined' && module.exports) {
     if (parsed.action === 'ack_all') {
       setState(TARGET, true);   // command (ack=false) → Orchestrator on({val:true}) feuert + reset
       log('alarm-ack-bridge: ack_all → ' + TARGET + ' = true');
-    } else {
-      log('alarm-ack-bridge: ack_one (id=' + parsed.id + ') ignoriert — Phase 1b', 'info');
+    } else if (parsed.action === 'ack_one') {
+      if (!parsed.id) {
+        log('alarm-ack-bridge: ack_one ohne id verworfen', 'warn');   // KEIN Fallback auf ack_all
+        return;
+      }
+      setState(ACK_ONE_TARGET, parsed.id);
+      log('alarm-ack-bridge: ack_one (id=' + parsed.id + ') → ' + ACK_ONE_TARGET);
     }
   });
 
