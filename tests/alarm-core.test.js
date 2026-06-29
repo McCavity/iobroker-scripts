@@ -165,3 +165,17 @@ test('buildHeartbeat: poll_age_s wird zu ganzer Zahl normalisiert, fehlend → n
   assert.equal(C.buildHeartbeat(true, null, TS).poll_age_s, null);
   assert.equal(C.buildHeartbeat(true, undefined, TS).poll_age_s, null);
 });
+
+test('applyAck(id): nur der Match wird acked, übrige unverändert', () => {
+  const out = C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], 'a');
+  assert.equal(out.find(x => x.id === 'a').acked, true);
+  assert.equal(out.find(x => x.id === 'b').acked, false);
+});
+test('applyAck(unbekannte id): No-op, keiner acked', () => {
+  const out = C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], 'zzz');
+  assert.ok(out.every(a => a.acked === false));
+});
+test('applyAck(leere/fehlende id): rückwärtskompatibel → alle acked', () => {
+  assert.ok(C.applyAck([{id:'a',acked:false},{id:'b',acked:false}], '').every(a => a.acked === true));
+  assert.ok(C.applyAck([{id:'a',acked:false}], undefined).every(a => a.acked === true));
+});

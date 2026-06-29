@@ -46,7 +46,14 @@ function reconcile(prevAlarms, mergedAlarms) {
   return { alarms, attention, resolved };
 }
 
-function applyAck(alarms) { return alarms.map(a => Object.assign({}, a, { acked: true })); }
+// id (optional): nicht-leerer String → nur dieser Alarm acked (Einzel-Quittierung, Phase 1b);
+// fehlend/leer → alle acked (ack_all, rückwärtskompatibel). Unbekannte id → No-op. Stets Kopien.
+function applyAck(alarms, id) {
+  const all = !(typeof id === 'string' && id);
+  return alarms.map(a => (all || a.id === id)
+    ? Object.assign({}, a, { acked: true })
+    : Object.assign({}, a));
+}
 
 function computeSignaltower(alarms) {
   if (alarms.some(a => !a.acked)) return { colour: 'AMBER', mode: 'fast_blink' };
