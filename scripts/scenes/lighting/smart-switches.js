@@ -141,8 +141,8 @@ onSwitch('00158d000ab7850f', 'Wohnzimmer Couchtisch', {
 //     Logo dient tagsüber als Deko-Licht (via Astro-Schalter aus
 //     scenes-lighting-everyday.js + auto-switch.js — schaltet sich um 01:00
 //     hart aus und um 05:00 wieder ein). In dem 4-Stunden-Fenster dazwischen
-//     soll es bei Wohnzimmer-Bewegung 60s als Nachtlicht reagieren, wenn es
-//     tatsächlich dunkel ist.
+//     soll es bei Anwesenheit als Nachtlicht leuchten — solange jemand da ist,
+//     nicht bloß 60s — wenn es tatsächlich dunkel ist.
 //
 //     Defense in depth:
 //       1. Hartes Zeitfenster 01:00–05:00 (egal was der Lux-Sensor sagt)
@@ -150,8 +150,10 @@ onSwitch('00158d000ab7850f', 'Wohnzimmer Couchtisch', {
 //       3. Lux-State-Fallback: `illuminance` (Vor-Re-Pair-Name) ODER
 //          `illuminance_raw` (nach 2026-05-27 Re-Pair / ZigBee-Adapter-Update)
 //       4. Fail-closed wenn beide States fehlen oder undefined sind
-//       5. Auto-Off respektiert Ownership-Transfer: Wenn der 60s-Timer über
+//       5. Auto-Off respektiert Ownership-Transfer: Wenn der Grace-Timer über
 //          05:00 hinaus läuft, hat das Astro-Tag-Skript übernommen → kein Off
+//       6. Zustandsgetrieben (occupancy-Flanken true UND false), kein Fixtimer:
+//          Logo bleibt an, solange occupancy true ist (Aqara-Hold ~90s)
 //
 //     Bug-Historie:
 //       2026-05-27 — `getState(...illuminance).val` lieferte `undefined` nach
@@ -163,12 +165,19 @@ onSwitch('00158d000ab7850f', 'Wohnzimmer Couchtisch', {
 //       04:59:xx → 60s-Timer läuft bis ~05:00:xx → Astro hat um 05:00:00
 //       das Logo via Tag-Schaltung übernommen, aber der Timer schaltete es
 //       fälschlich wieder aus. Fix: isNightHours()-Check im setTimeout.
+//       2026-07-02 — "dunkel trotz Anwesenheit": die Subscription war rein
+//       flanken-getrieben (occupancy=true) + starrer 60s-Off-Timer. Bei
+//       durchgehender Anwesenheit >60s bleibt occupancy konstant true (keine
+//       neue Flanke) → Logo ging aus, während man noch im dunklen Raum stand.
+//       Fix: zustandsgetrieben — an bei occupancy→true, aus erst bei
+//       occupancy→false + Grace (deckt die ~10s-Bounces). occupancy fällt lt.
+//       History ~90s nach der letzten Bewegung zuverlässig auf false.
 // ---------------------------------------------------------------------------
 const WZ_MOTION_DEV     = '00158d0007c62b1b';
 const EINTRACHT_LOGO    = 'sonoff.0.Eintracht Logo.POWER';
 const MANUAL_OVERRIDE   = '0_userdata.0.trigger.scenes.lighting._manual';
 const NIGHTLIGHT_LUX    = 15;
-const NIGHTLIGHT_TIME   = 60 * 1000;  // 60 Sekunden
+const NIGHTLIGHT_GRACE  = 30 * 1000;  // 30s Nachlauf nach Ende der Anwesenheit (deckt occupancy-Bounces ~10s)
 const NIGHT_START_HOUR  = 1;          // ab 01:00 inkl.
 const NIGHT_END_HOUR    = 5;          // bis 05:00 exkl.
 
@@ -193,46 +202,64 @@ function isNightHours() {
     return h >= NIGHT_START_HOUR && h < NIGHT_END_HOUR;
 }
 
-let eintrachtTimeout = null;
+let eintrachtOffTimeout = null;
 
-on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, val: true, change: 'ne' }, () => {
-    // (2) Party-Override: Lichtsteuerung manuell überschrieben → nichts tun.
+function cancelEintrachtOff() {
+    if (eintrachtOffTimeout) {
+        clearTimeout(eintrachtOffTimeout);
+        eintrachtOffTimeout = null;
+    }
+}
+
+// Zustandsgetrieben (Fix 2026-07-02): auf JEDE occupancy-Flanke reagieren.
+// Anwesenheit → an (Off-Timer stoppen); Anwesenheit endet → Grace, dann aus.
+// So bleibt das Logo an, solange jemand da ist, statt nach 60s auszugehen.
+on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, change: 'ne' }, (obj) => {
+    const present = obj.state.val === true;
+
+    // (2) Party-Override: Lichtsteuerung manuell überschrieben → Automatik aus.
     if (getState(MANUAL_OVERRIDE).val === true) {
-        log(`Wohnzimmer-Bewegung erkannt, aber _manual=true (Party-Modus) — Eintracht-Logo bleibt aus`, 'info');
+        if (present) log(`Wohnzimmer-Bewegung, aber _manual=true (Party-Modus) — Eintracht-Logo bleibt unangetastet`, 'info');
         return;
     }
-    // (1) Außerhalb des Nacht-Fensters macht das Logo via Astro seine Sache.
-    if (!isNightHours()) {
-        log(`Wohnzimmer-Bewegung außerhalb Nacht-Fenster (Stunde ${new Date().getHours()}) — Eintracht-Logo bleibt aus`, 'debug');
-        return;
-    }
-    // (3) Lux mit Fallback holen.
-    const lux = getWzLux();
-    // (4) Fail-closed bei fehlendem Wert.
-    if (lux === null) {
-        log(`Wohnzimmer-Bewegung nachts, aber kein Lux-Wert verfügbar — fail-closed, Eintracht-Logo bleibt aus`, 'warn');
-        return;
-    }
-    if (lux > NIGHTLIGHT_LUX) {
-        log(`Wohnzimmer-Bewegung nachts erkannt, aber zu hell (${lux} lx) — Eintracht-Logo bleibt aus`, 'debug');
-        return;
-    }
-    log(`Wohnzimmer-Nachtbewegung (${lux} lx) — Eintracht-Logo 60s an`, 'info');
-    setState(EINTRACHT_LOGO, true);
-    if (eintrachtTimeout) clearTimeout(eintrachtTimeout);
-    eintrachtTimeout = setTimeout(() => {
-        // Wenn der Timer über 05:00 hinaus läuft, hat das Astro-Tag-Skript
-        // (scenes-lighting-everyday) inzwischen die Ownership übernommen —
-        // nicht ausschalten, sonst kippt das Logo nach dem morgendlichen
-        // Astro-Einschalten fälschlich wieder aus.
+
+    if (present) {
+        // Anwesenheit erkannt: laufenden Ausschalt-Timer stoppen, ggf. einschalten.
+        cancelEintrachtOff();
+        // (1) Außerhalb des Nacht-Fensters macht das Logo via Astro seine Sache.
         if (!isNightHours()) {
-            log('Eintracht-Logo Auto-Off übersprungen — Nacht-Fenster vorbei (Astro hat übernommen)', 'info');
-            eintrachtTimeout = null;
+            log(`Wohnzimmer-Bewegung außerhalb Nacht-Fenster (Stunde ${new Date().getHours()}) — Eintracht-Logo bleibt aus`, 'debug');
             return;
         }
-        setState(EINTRACHT_LOGO, false);
-        eintrachtTimeout = null;
-    }, NIGHTLIGHT_TIME);
+        // (3) Lux mit Fallback holen. (4) Fail-closed bei fehlendem Wert.
+        const lux = getWzLux();
+        if (lux === null) {
+            log(`Wohnzimmer-Bewegung nachts, aber kein Lux-Wert verfügbar — fail-closed, Eintracht-Logo bleibt aus`, 'warn');
+            return;
+        }
+        if (lux > NIGHTLIGHT_LUX) {
+            log(`Wohnzimmer-Bewegung nachts erkannt, aber zu hell (${lux} lx) — Eintracht-Logo bleibt aus`, 'debug');
+            return;
+        }
+        log(`Wohnzimmer-Nachtbewegung (${lux} lx) — Eintracht-Logo an (bleibt bis Ende der Anwesenheit)`, 'info');
+        setState(EINTRACHT_LOGO, true);
+    } else {
+        // Anwesenheit endet (occupancy → false): Grace-Timer, dann aus.
+        // Der Grace deckt die beobachteten ~10s-Bounces (false→true) ab, damit
+        // das Logo bei kurzen Aussetzern nicht ausflackert.
+        cancelEintrachtOff();
+        eintrachtOffTimeout = setTimeout(() => {
+            eintrachtOffTimeout = null;
+            // (5) Ownership-Transfer: Läuft der Grace über 05:00 hinaus, hat das
+            // Astro-Tag-Skript (scenes-lighting-everyday) übernommen → kein Off.
+            if (!isNightHours()) {
+                log('Eintracht-Logo Auto-Off übersprungen — Nacht-Fenster vorbei (Astro hat übernommen)', 'info');
+                return;
+            }
+            log('Wohnzimmer wieder leer — Eintracht-Logo aus', 'info');
+            setState(EINTRACHT_LOGO, false);
+        }, NIGHTLIGHT_GRACE);
+    }
 });
 
 // ============================================================================
