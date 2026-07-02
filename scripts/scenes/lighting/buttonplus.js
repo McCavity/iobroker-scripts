@@ -499,27 +499,10 @@ on({ id: 'samsung_tizen.0.powerOn' /* power state of TV */, change: 'ne' }, asyn
     await Setze_LEDs_zur_C3_BCck();
   }
 });
-// Anzeige Internet setzen
-// Provider
-on({ id: 'unifi.0.default.devices.ac:8b:a9:6d:c0:bd.ip' /* IP address */, change: 'ne' }, async (obj) => {
-  let value = obj.state.val;
-  let oldValue = obj.oldState.val;
-  console.info((['Änderung der UniFi UDM SE WAN IP: ',getState('unifi.0.default.devices.ac:8b:a9:6d:c0:bd.ip').val,'; aktuelle LTE Adresse: ',getState('unifi.0.default.networks.lte_failover_wan.wan_ip').val].join('')));
-  if (getState('unifi.0.default.devices.ac:8b:a9:6d:c0:bd.ip').val == getState('unifi.0.default.networks.lte_failover_wan.wan_ip').val) {
-    setState('mqtt.0.data.network.connection' /* data/network/connection */, 'LTE');
-    console.info('LTE Backup aktiv');
-  } else {
-    setState('mqtt.0.data.network.connection' /* data/network/connection */, 'Glasfaser');
-    console.info('Glasfaser aktiv');
-  }
-  await SpeedTest();
-  // Das Script braucht ca. 20 Sekunden, deshalb stehen die Ergebnisse erst nach einer kleinen Pause zur Verfügung
-  timeout = setTimeout(async () => {
-    timeout = null;
-    setState('mqtt.0.data.network.download' /* data/network/download */, ('' + getState('javascript.0.Speedtest.Ergebnisse.Download_MBit').val));
-    setState('mqtt.0.data.network.upload' /* data/network/upload */, ('' + getState('javascript.0.Speedtest.Ergebnisse.Upload_MBit').val));
-  }, 30000);
-});
+// (unifi-Block entfernt 2026-07-02 — unifi.0-Adapter deinstalliert.)
+// Die LTE/Glasfaser-Provider-Anzeige + der on-demand-Speedtest bei WAN-IP-Wechsel
+// waren Teil der aufgegebenen ButtonPlus-Seite 2. Der echte stündliche Speedtest
+// läuft eigenständig in common/speedtest.js (schreibt InfluxDB + Grafana).
 // Stündlicher Speedtest Update
 schedule("1 * * * *", async () => {
   setState('mqtt.0.data.network.download' /* data/network/download */, ('' + getState('javascript.0.Speedtest.Ergebnisse.Download_MBit').val));
