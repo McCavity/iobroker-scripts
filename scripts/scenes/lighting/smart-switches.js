@@ -184,12 +184,16 @@ const NIGHT_END_HOUR    = 5;          // bis 05:00 exkl.
 // Helper: aktueller Lux-Wert mit Adapter-Rename-Fallback. Liefert null wenn
 // kein State einen numerischen Wert hat → Caller behandelt das als
 // "Unklar — nicht auslösen".
+// existsState-Guard: nach dem ZigBee-Adapter-2.x-Rename existiert der alte
+// State `…illuminance` nicht mehr → ein blindes getState darauf wirft einen
+// ioBroker-WARN. Erst prüfen, dann lesen (Lehre 27.05./07.06.).
 function getWzLux() {
     const candidates = [
         `zigbee.0.${WZ_MOTION_DEV}.illuminance`,
         `zigbee.0.${WZ_MOTION_DEV}.illuminance_raw`,
     ];
     for (const id of candidates) {
+        if (!existsState(id)) continue;
         const s = getState(id);
         if (s && typeof s.val === 'number') return s.val;
     }
