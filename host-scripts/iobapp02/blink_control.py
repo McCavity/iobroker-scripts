@@ -21,6 +21,7 @@ entspricht. Ein exit 0 bedeutet damit *bestaetigt gesetzt*, nicht nur
 verlassen.
 """
 import asyncio
+import logging
 import os
 import sys
 from aiohttp import ClientSession
@@ -28,7 +29,27 @@ from blinkpy.blinkpy import Blink
 from blinkpy.auth import Auth
 from blinkpy.helpers.util import json_load
 
-CRED_PATH = '/home/iobuser/blink-data/blink.cred.json'
+# CRED_PATH via Env ueberschreibbar (Testbarkeit: Bogus-Token gegen echtes
+# blinkpy laufen lassen, ohne den Prod-Token anzufassen).
+CRED_PATH = os.environ.get(
+    'BLINK_CRED_PATH', '/home/iobuser/blink-data/blink.cred.json'
+)
+
+# blinkpy loggt Auth-Fehler ("Login failed" / "Cannot setup Blink platform")
+# ueber seinen eigenen Logger auf stderr -> das wuerde unsere klare Re-Auth-
+# Meldung im Telegram-Alert zumuellen. Stummschalten; wir liefern die
+# aussagekraeftige Meldung selbst (REAUTH_HINT).
+logging.getLogger('blinkpy').setLevel(logging.CRITICAL)
+
+# Handlungsfertiger Hinweis, der bei Auth-/Token-Fehlern (exit 2) auf stderr
+# geht und von auto-switch.js unveraendert in den Telegram-Alert weitergereicht
+# wird. Single Source of Truth fuer die Re-Auth-Anleitung.
+REAUTH_HINT = (
+    'Re-Auth erforderlich (Blink-Login/Token abgelaufen).\n'
+    'Auf iobapp02.lan als iobuser ausfuehren:\n'
+    '  /home/iobuser/blink-venv/bin/python /home/iobuser/blink-setup.py\n'
+    '(Blink-Email, -Passwort + neue SMS-PIN noetig).'
+)
 
 # Verifiziertes Setzen: nach jedem async_arm Ground-Truth re-lesen und gegen
 # die Absicht pruefen. Blinks Command-Completion ist gelegentlich flakey
@@ -44,8 +65,7 @@ async def _connect():
         cred = await json_load(CRED_PATH)
     except Exception as e:
         await session.close()
-        print(f'Token-Datei nicht lesbar: {e}', file=sys.stderr)
-        print('  -> /home/iobuser/blink-venv/bin/python /home/iobuser/blink-setup.py', file=sys.stderr)
+        print(f'Token-Datei nicht lesbar: {e}\n{REAUTH_HINT}', file=sys.stderr)
         sys.exit(2)
 
     blink = Blink(session=session)
@@ -53,10 +73,25 @@ async def _connect():
     try:
         await blink.start()
     except Exception as e:
+        # blinkpy wirft hier u.a. BlinkTwoFARequiredError, wenn die Session
+        # abgelaufen ist und ein neuer 2FA-Login noetig waere.
         await session.close()
-        print(f'Login fehlgeschlagen: {e}', file=sys.stderr)
-        print('  -> /home/iobuser/blink-venv/bin/python /home/iobuser/blink-setup.py', file=sys.stderr)
+        print(f'Login fehlgeschlagen: {e}\n{REAUTH_HINT}', file=sys.stderr)
         sys.exit(2)
+
+    # Robuste Auth-Erkennung: blinkpy >=0.25.6 faengt LoginError/TokenRefreshFailed
+    # INTERN in start() ab (loggt "Cannot setup Blink platform.") und liefert ein
+    # nicht-verfuegbares System OHNE Exception zurueck -> blink.sync ist dann leer.
+    # Ohne diese Pruefung liefe das in ein irrefuehrendes exit 3 ("Sync-Modul
+    # nicht gefunden"); wir wollen exit 2 (Auth) mit Re-Auth-Hinweis.
+    if not blink.available or not blink.sync:
+        await session.close()
+        print(
+            f'Login fehlgeschlagen: System nicht verfuegbar (keine Sync-Module).\n{REAUTH_HINT}',
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     return blink, session
 
 

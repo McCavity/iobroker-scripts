@@ -27,8 +27,17 @@ function blinkSet(action) {
         if (err) {
             // exit != 0 = blink_control.py konnte den Zustand NICHT bestaetigen
             // (Soll/Ist-Mismatch nach Retry, Auth-/API-Fehler oder Timeout).
-            log(`blink ${action} Außen FAILED: ${err.message} | stdout=${out} | stderr=${errOut}`, 'error');
-            blinkNotify(`${action} Außen fehlgeschlagen — Kameras evtl. im falschen Zustand! ${errOut || out || err.message}`);
+            log(`blink ${action} Außen FAILED (code=${err.code}): ${err.message} | stdout=${out} | stderr=${errOut}`, 'error');
+            // Exit 2 = Auth/Token-Fehler (Login abgelaufen): blink_control.py legt
+            // die handlungsfertige Re-Auth-Anleitung bereits in stderr (REAUTH_HINT)
+            // -> unveraendert weiterreichen. Robust gegen fehlendes err.code:
+            // zusaetzlich auf die Signatur im stderr pruefen.
+            const needsReauth = err.code === 2 || /blink-setup\.py/.test(errOut);
+            if (needsReauth) {
+                blinkNotify(`${action} 'Außen' fehlgeschlagen — Kameras evtl. im falschen Zustand!\n${errOut}`);
+            } else {
+                blinkNotify(`${action} Außen fehlgeschlagen — Kameras evtl. im falschen Zustand! ${errOut || out || err.message}`);
+            }
             return;
         }
         log(`blink ${action} Außen ok: ${out}`);
