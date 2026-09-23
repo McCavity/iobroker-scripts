@@ -147,10 +147,57 @@ function computeOutputs(prevState, sourcesMap, opts) {
   };
 }
 
+const DIGEST_SECTIONS = [
+  { kind: 'fired',     icon: '🔴', title: 'NEU' },
+  { kind: 'escalated', icon: '⬆️', title: 'ESKALIERT' },
+  { kind: 'resolved',  icon: '✅', title: 'OK' },
+  { kind: 'silenced',  icon: '🔕', title: 'STUMM (Grafana-Silence)' },
+];
+
+function alarmLine(a) {
+  return `${a.host}: ${a.name} (${a.severity})`;
+}
+
+// Eine Sammelnachricht je Auswertungsfenster. Feste Reihenfolge, damit das Wichtige oben steht.
+function formatDigest(events, opts) {
+  if (!events || !events.length) return null;
+  const prefix = (opts && opts.prefix) || '';
+  const max = (opts && opts.max) || 15;
+  const lines = [];
+  let shown = 0, hidden = 0;
+  for (const sec of DIGEST_SECTIONS) {
+    const inSec = events.filter(e => e.kind === sec.kind);
+    if (!inSec.length) continue;
+    lines.push(`${sec.icon} ${sec.title} (${inSec.length})`);
+    for (const e of inSec) {
+      if (shown < max) { lines.push(`${sec.icon} ${alarmLine(e.alarm)}`); shown++; }
+      else hidden++;
+    }
+  }
+  if (hidden) lines.push(`… und ${hidden} weitere`);
+  return prefix + 'Alarmkette\n' + lines.join('\n');
+}
+
+// Erinnerung und „Wartung beendet": Zustand statt Ereignis.
+function formatOpenList(title, alarms, opts) {
+  const prefix = (opts && opts.prefix) || '';
+  const max = (opts && opts.max) || 15;
+  const unacked = alarms.filter(a => !a.acked).length;
+  const lines = [`${prefix}${title} — ${alarms.length} offen, davon ${unacked} unquittiert`];
+  alarms.slice(0, max).forEach(a => lines.push(`${a.acked ? '☑️' : '🔴'} ${alarmLine(a)}`));
+  if (alarms.length > max) lines.push(`… und ${alarms.length - max} weitere`);
+  return lines.join('\n');
+}
+
+function touchesUnacked(events) {
+  return (events || []).some(e => e.kind === 'fired' || e.kind === 'escalated');
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SCHEMA_VERSION, LIST_MAX_BYTES, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
     computeSignaltower, buildList, buildNew, buildHeartbeat, collectEvents, computeOutputs, utf8Bytes,
+    formatDigest, formatOpenList, touchesUnacked, alarmLine,
   };
 }
 

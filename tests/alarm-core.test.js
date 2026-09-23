@@ -266,3 +266,50 @@ test('collectEvents: quittierter Alarm, der endet → resolved (Entwarnung auch 
   const ev = C.collectEvents([{id:'a',acked:true}], [], [{id:'a',acked:true}], []);
   assert.deepEqual(ev.map(e => e.kind), ['resolved']);
 });
+
+const A = (id, sev, extra) => Object.assign({id, host:'h'+id, name:'Alarm '+id, severity:sev}, extra || {});
+
+test('formatDigest: leer → null', () => {
+  assert.equal(C.formatDigest([], {}), null);
+});
+
+test('formatDigest: gliedert neu / eskaliert / OK / stumm in fester Reihenfolge, mit Präfix', () => {
+  const txt = C.formatDigest([
+    {kind:'resolved', alarm:A('1','warning')},
+    {kind:'fired', alarm:A('2','critical')},
+    {kind:'silenced', alarm:A('3','warning')},
+    {kind:'escalated', alarm:A('4','critical')},
+  ], {prefix:'[neu] '});
+  assert.ok(txt.startsWith('[neu] '));
+  const iNew = txt.indexOf('🔴'), iEsc = txt.indexOf('⬆️'), iOk = txt.indexOf('✅'), iMute = txt.indexOf('🔕');
+  assert.ok(iNew >= 0 && iNew < iEsc && iEsc < iOk && iOk < iMute);
+  assert.match(txt, /h2: Alarm 2 \(critical\)/);
+});
+
+test('formatDigest: feuert und endet im selben Fenster → beide Zeilen', () => {
+  const txt = C.formatDigest([{kind:'fired', alarm:A('1','warning')}, {kind:'resolved', alarm:A('1','warning')}], {});
+  assert.match(txt, /🔴/);
+  assert.match(txt, /✅/);
+});
+
+test('formatDigest: Obergrenze → "… und N weitere"', () => {
+  const ev = [];
+  for (let i = 0; i < 22; i++) ev.push({kind:'fired', alarm:A(String(i),'warning')});
+  const txt = C.formatDigest(ev, {max:15});
+  assert.match(txt, /… und 7 weitere/);
+  assert.equal((txt.match(/^🔴 h/gm) || []).length, 15);
+});
+
+test('formatOpenList: Titel, Zählung unquittiert, Obergrenze', () => {
+  const alarms = [A('1','critical',{acked:false}), A('2','warning',{acked:true})];
+  const txt = C.formatOpenList('⏰ Erinnerung', alarms, {prefix:'[neu] '});
+  assert.ok(txt.startsWith('[neu] ⏰ Erinnerung'));
+  assert.match(txt, /2 offen, davon 1 unquittiert/);
+  assert.match(txt, /h1: Alarm 1 \(critical\)/);
+});
+
+test('touchesUnacked: nur fired/escalated setzen den Erinnerungstakt zurück', () => {
+  assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'silenced'}]), false);
+  assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'fired'}]), true);
+  assert.equal(C.touchesUnacked([{kind:'escalated'}]), true);
+});
