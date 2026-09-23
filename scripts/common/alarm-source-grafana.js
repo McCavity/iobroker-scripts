@@ -55,8 +55,16 @@ function mapGrafanaAlerts(raw, nowIso) {
   return { alarms, dropped };
 }
 
+// Phase 2: Fingerprints, die Grafana per Silence unterdrückt. Der Orchestrator meldet ihr
+// Verschwinden als 🔕 statt als ✅ — eine Silence ist keine Entwarnung.
+function suppressedIds(dropped) {
+  return (dropped || [])
+    .filter(d => d.reason === 'not-active' && d.state === 'suppressed' && d.fingerprint)
+    .map(d => d.fingerprint);
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { mapGrafanaAlerts };
+  module.exports = { mapGrafanaAlerts, suppressedIds };
 } else {
   // ===================== ioBroker-Adapter =====================
   const DP = '0_userdata.0.alerting.';
@@ -65,6 +73,7 @@ if (typeof module !== 'undefined' && module.exports) {
   const TIMEOUT_MS = 5000;
 
   createState(DP + 'sources.grafana', '[]', { name: 'alerting sources.grafana', type: 'string', role: 'json', read: true, write: true });
+  createState(DP + 'grafana.suppressed', '[]', { name: 'alerting grafana.suppressed', type: 'string', role: 'json', read: true, write: true });
   createState(DP + 'grafana.ok', false, { name: 'alerting grafana.ok', type: 'boolean', role: 'indicator.reachable', read: true, write: true });
   createState(DP + 'grafana.last_ok', '', { name: 'alerting grafana.last_ok', type: 'string', role: 'text', read: true, write: true });
 
@@ -90,6 +99,11 @@ if (typeof module !== 'undefined' && module.exports) {
       for (const d of dropped) {
         if (d.reason === 'no-fingerprint') log('alarm-source-grafana: Alarm ohne fingerprint übersprungen (' + d.name + ')', 'warn');
       }
+      // VOR sources.grafana schreiben: dessen Änderung triggert drive() im Orchestrator,
+      // und der muß beim Lesen schon wissen, welche Alarme per Silence verschwunden sind.
+      const supp = JSON.stringify(suppressedIds(dropped));
+      const curSupp = existsState(DP + 'grafana.suppressed') ? (getState(DP + 'grafana.suppressed').val || '[]') : '[]';
+      if (supp !== curSupp) setStateSafe(DP + 'grafana.suppressed', supp);
       // Nur schreiben, wenn sich die Quelle wirklich geändert hat → kein 15-s-Churn
       // im Orchestrator (er dri-vet auf jede sources.grafana-Änderung).
       const next = JSON.stringify(alarms);
