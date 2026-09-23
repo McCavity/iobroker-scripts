@@ -71,3 +71,4 @@ if (typeof module !== 'undefined' && module.exports) {
 
   log('alarm-ack-bridge bereit — hört auf ' + ACK_STATE);
 }
+

@@ -128,3 +128,4 @@ if (typeof module !== 'undefined' && module.exports) {
     computeSignaltower, buildList, buildNew, buildHeartbeat, buildTestTelegram, computeOutputs,
   };
 }
+

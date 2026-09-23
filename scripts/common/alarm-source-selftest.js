@@ -41,3 +41,4 @@ function declare(sev) {
 
 on({ id: DP + 'test.trigger' }, (obj) => declare(String(obj.state.val || '')));
 log('alarm-source-test gestartet');
+

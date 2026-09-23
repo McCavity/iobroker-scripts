@@ -109,3 +109,4 @@ schedule('0 5 * * *', async () => {
     console.debug('Checke Beleuchtung an morgens (05:00 Backup)');
     await beleuchtung(true);
 });
+
