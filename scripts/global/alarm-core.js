@@ -10,6 +10,8 @@
 const SCHEMA_VERSION = 1;
 const LIST_MAX_BYTES = 7000;   // unter dem 8192-Byte-MQTT-Puffer des Buttons (MqttLink.h)
 const SEV_RANK = { info: 0, warning: 1, critical: 2 };
+const REMINDER_MS = 4 * 3600 * 1000;
+const GRAFANA_DOWN_MS = 5 * 60 * 1000;
 
 function severityRank(sev) {
   return Object.prototype.hasOwnProperty.call(SEV_RANK, sev) ? SEV_RANK[sev] : SEV_RANK.warning;
@@ -193,11 +195,32 @@ function touchesUnacked(events) {
   return (events || []).some(e => e.kind === 'fired' || e.kind === 'escalated');
 }
 
+// Erinnerung nur für unquittierte Alarme; maintenance unterdrückt sie (away nicht).
+// Fehlender Takt (Erstlauf) ist NICHT fällig — der Orchestrator initialisiert ihn beim Laden.
+function dueReminder(notify, alarms, nowMs, mode, intervalMs) {
+  if (mode === 'maintenance') return false;
+  if (!notify || typeof notify.last_unacked_notify !== 'number') return false;
+  if (!(alarms || []).some(a => !a.acked)) return false;
+  return nowMs - notify.last_unacked_notify >= (intervalMs || REMINDER_MS);
+}
+
+// Gegenseitige Überwachung: Grafana tot, ioBroker lebt → der Orchestrator meldet es.
+function grafanaWatch(prev, grafanaOk, nowMs, thresholdMs) {
+  const limit = thresholdMs || GRAFANA_DOWN_MS;
+  const p = prev || { down_since: null, notified: false };
+  if (grafanaOk) {
+    return { next: { down_since: null, notified: false }, message: p.notified ? 'up' : null };
+  }
+  const since = (p.down_since === null || p.down_since === undefined) ? nowMs : p.down_since;
+  if (!p.notified && nowMs - since >= limit) return { next: { down_since: since, notified: true }, message: 'down' };
+  return { next: { down_since: since, notified: p.notified }, message: null };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    SCHEMA_VERSION, LIST_MAX_BYTES, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
+    SCHEMA_VERSION, LIST_MAX_BYTES, REMINDER_MS, GRAFANA_DOWN_MS, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
     computeSignaltower, buildList, buildNew, buildHeartbeat, collectEvents, computeOutputs, utf8Bytes,
-    formatDigest, formatOpenList, touchesUnacked, alarmLine,
+    formatDigest, formatOpenList, touchesUnacked, alarmLine, dueReminder, grafanaWatch,
   };
 }
 

@@ -313,3 +313,38 @@ test('touchesUnacked: nur fired/escalated setzen den Erinnerungstakt zurück', (
   assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'fired'}]), true);
   assert.equal(C.touchesUnacked([{kind:'escalated'}]), true);
 });
+
+const H = 3600 * 1000;
+
+test('dueReminder: unquittiert + 4 h still → fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 4 * H, 'normal'), true);
+});
+test('dueReminder: unter 4 h → nicht fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 4 * H - 1, 'normal'), false);
+});
+test('dueReminder: alle quittiert → nie fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:true}], 10 * H, 'normal'), false);
+});
+test('dueReminder: maintenance → nie fällig; away → fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 10 * H, 'maintenance'), false);
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 10 * H, 'away'), true);
+});
+test('dueReminder: fehlendes notify → nicht fällig (Erstlauf ohne Sturm)', () => {
+  assert.equal(C.dueReminder(null, [{acked:false}], 10 * H, 'normal'), false);
+});
+
+test('grafanaWatch: kurzer Ausfall unter Schwelle → keine Meldung, auch keine Entwarnung', () => {
+  let s = {down_since: null, notified: false};
+  let r = C.grafanaWatch(s, false, 0);            s = r.next; assert.equal(r.message, null);
+  r = C.grafanaWatch(s, false, 5 * 60000 - 1);    s = r.next; assert.equal(r.message, null);
+  r = C.grafanaWatch(s, true, 5 * 60000);         assert.equal(r.message, null);
+  assert.deepEqual(r.next, {down_since: null, notified: false});
+});
+test('grafanaWatch: Ausfall ≥ 5 min → einmal down, dann einmal up', () => {
+  let s = {down_since: null, notified: false};
+  let r = C.grafanaWatch(s, false, 0);          s = r.next;
+  r = C.grafanaWatch(s, false, 5 * 60000);      s = r.next; assert.equal(r.message, 'down');
+  r = C.grafanaWatch(s, false, 6 * 60000);      s = r.next; assert.equal(r.message, null);   // nicht wiederholen
+  r = C.grafanaWatch(s, true, 7 * 60000);       assert.equal(r.message, 'up');
+  assert.deepEqual(r.next, {down_since: null, notified: false});
+});
