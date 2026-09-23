@@ -158,6 +158,10 @@ function ready() {
     const mode = readMode();
     if (lastMode === 'maintenance' && mode !== 'maintenance' && currentState.alarms.length) {
       sendTelegram(formatOpenList('🛠️ Wartung beendet', currentState.alarms, { prefix: TG_PREFIX }));
+      if (currentState.alarms.some(a => !a.acked)) {
+        notify.last_unacked_notify = Date.now();   // „Wartung beendet" ersetzt die fällige Erinnerung
+        saveNotify();
+      }
     }
     lastMode = mode;
     drive(false);
