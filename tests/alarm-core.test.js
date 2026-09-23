@@ -104,13 +104,13 @@ test('buildNew: null wenn keine attention, sonst count+max', () => {
   assert.deepEqual(C.buildNew([{severity:'critical'}], TS), {schema_version:1, ts:TS, count_new:1, max_severity:'critical'});
 });
 
-test('computeOutputs: Test-Alarm fired → fast_blink, new gesetzt, Test-Telegram 🔔', () => {
+test('computeOutputs: Test-Alarm fired → fast_blink, new gesetzt, Ereignis fired', () => {
   const r = C.computeOutputs({alarms:[]}, {test:[{id:'t1',host:'TEST',name:'Selbsttest',severity:'warning',since:TS}]},
     {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
   assert.ok(r.mqtt.new && r.mqtt.new.count_new === 1);
-  assert.equal(r.telegrams.length, 1);
-  assert.match(r.telegrams[0], /🔔.*warning/);
+  assert.deepEqual(r.events.map(e => e.kind), ['fired']);
+  assert.equal(r.events[0].alarm.id, 't1');
   assert.equal(r.state.alarms[0].acked, false);
 });
 
@@ -122,29 +122,29 @@ test('computeOutputs: ack → signaltower on, kein new', () => {
   assert.equal(r.mqtt.new, null);
 });
 
-test('computeOutputs: Test-Alarm resolved → off, Test-Telegram ✅', () => {
+test('computeOutputs: Test-Alarm resolved → off, Ereignis resolved', () => {
   const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:false}]};
   const r = C.computeOutputs(prev, {test:[]}, {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {mode:'off'});
-  assert.equal(r.telegrams.length, 1);
-  assert.match(r.telegrams[0], /✅/);
+  assert.deepEqual(r.events.map(e => e.kind), ['resolved']);
 });
 
-test('computeOutputs: Eskalation warning→critical → erneute attention + Telegram', () => {
+test('computeOutputs: Eskalation warning→critical → Ereignis escalated', () => {
   const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:true}]};
   const r = C.computeOutputs(prev, {test:[{id:'t1',host:'TEST',name:'n',severity:'critical'}]},
     {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
   assert.equal(r.mqtt.new.count_new, 1);
-  assert.match(r.telegrams[0], /eskaliert auf critical/);
+  assert.deepEqual(r.events.map(e => e.kind), ['escalated']);
+  assert.equal(r.events[0].alarm.severity, 'critical');
 });
 
-test('computeOutputs: mode=away unterdrückt signaltower + new, Telegram bleibt, state aktualisiert', () => {
+test('computeOutputs: mode=away unterdrückt signaltower + new, Ereignisse bleiben', () => {
   const r = C.computeOutputs({alarms:[]}, {test:[{id:'t1',host:'TEST',name:'n',severity:'warning',since:TS}]},
     {ack:false, mode:'away', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {mode:'off'});
   assert.equal(r.mqtt.new, null);
-  assert.equal(r.telegrams.length, 1);
+  assert.equal(r.events.length, 1);
   assert.equal(r.state.alarms.length, 1);
 });
 
@@ -246,4 +246,23 @@ test('buildList: kritische Alarme fallen nie vor Warnungen heraus', () => {
 test('utf8Bytes: Umlaut und Emoji zählen mehrbytig', () => {
   assert.equal(C.utf8Bytes('aä🔴'), 1 + 2 + 4);
   assert.equal(unescape(encodeURIComponent('aä🔴')).length, 7);   // Fallback-Zweig, ohne Buffer
+});
+
+test('computeOutputs: Grafana-Alarm verschwindet per Silence → silenced, nicht resolved', () => {
+  const prev = {alarms:[{id:'g1',host:'h',name:'n',severity:'warning',source:'grafana',acked:true}]};
+  const r = C.computeOutputs(prev, {grafana:[]},
+    {ack:false, mode:'normal', ts:TS, deviceId:'office', suppressedIds:['g1']});
+  assert.deepEqual(r.events.map(e => e.kind), ['silenced']);
+});
+
+test('computeOutputs: quittierter Alarm ohne Änderung → keine Ereignisse', () => {
+  const prev = {alarms:[{id:'g1',host:'h',name:'n',severity:'warning',source:'grafana',acked:true}]};
+  const r = C.computeOutputs(prev, {grafana:[{id:'g1',host:'h',name:'n',severity:'warning'}]},
+    {ack:false, mode:'normal', ts:TS, deviceId:'office'});
+  assert.deepEqual(r.events, []);
+});
+
+test('collectEvents: quittierter Alarm, der endet → resolved (Entwarnung auch nach ACK)', () => {
+  const ev = C.collectEvents([{id:'a',acked:true}], [], [{id:'a',acked:true}], []);
+  assert.deepEqual(ev.map(e => e.kind), ['resolved']);
 });

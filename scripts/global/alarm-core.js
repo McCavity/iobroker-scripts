@@ -114,17 +114,21 @@ function buildHeartbeat(grafanaOk, pollAgeS, ts) {
   };
 }
 
-function buildTestTelegram(kind, alarm) {
-  const sev = alarm ? alarm.severity : '';
-  if (kind === 'fired')     return `🔔 TEST-Alarm (${sev}) ausgelöst — Selbsttest Alarmkette`;
-  if (kind === 'escalated') return `🔔 TEST-Alarm eskaliert auf ${sev}`;
-  if (kind === 'resolved')  return `✅ TEST-Alarm Entwarnung — Selbsttest beendet`;
-  return '';
+// Ereignisse für die Telegram-Sammelnachricht (Phase 2, Strang 3). Quelle ist reconcile():
+// attention = neu ODER eskaliert (ACK-Reset nach ISA-18.2), resolved = nicht mehr gemeldet.
+// Verschwindet ein Alarm, weil Grafana ihn per Silence unterdrückt, ist das KEIN OK.
+function collectEvents(prevAlarms, attention, resolved, suppressedIds) {
+  const prevIds = new Set((prevAlarms || []).map(a => a.id));
+  const suppressed = new Set(suppressedIds || []);
+  const events = [];
+  for (const a of attention) events.push({ kind: prevIds.has(a.id) ? 'escalated' : 'fired', alarm: a });
+  for (const a of resolved) events.push({ kind: suppressed.has(a.id) ? 'silenced' : 'resolved', alarm: a });
+  return events;
 }
 
-// Integration: prev-State + Quellen + Ack + Mode → { state, signaltower, mqtt, telegrams }.
-// Mode-Hook: away/maintenance unterdrücken physische/hörbare Ausgänge (signaltower + new-Beep),
-// Test-Telegram + state-Wahrheit bleiben.
+// Integration: prev-State + Quellen + Ack + Mode → { state, signaltower, mqtt, events }.
+// Mode-Hook: away/maintenance unterdrücken physische/hörbare Ausgänge (signaltower + new-Beep);
+// Ereignisse + state-Wahrheit bleiben.
 function computeOutputs(prevState, sourcesMap, opts) {
   const ts = opts.ts, deviceId = opts.deviceId, mode = opts.mode || 'normal';
   const prevAlarms = (prevState && prevState.alarms) || [];
@@ -133,25 +137,20 @@ function computeOutputs(prevState, sourcesMap, opts) {
   // Präzedenz: opts.ackId (Einzel, Phase 1b) vor opts.ack (alle). Beide leer → kein Ack.
   if (opts.ackId) alarms = applyAck(alarms, opts.ackId);
   else if (opts.ack) alarms = applyAck(alarms);
-  const telegrams = [];
-  for (const a of attention) if (a.source === 'test') {
-    const wasPresent = prevAlarms.some(p => p.id === a.id);
-    telegrams.push(buildTestTelegram(wasPresent ? 'escalated' : 'fired', a));
-  }
-  for (const a of resolved) if (a.source === 'test') telegrams.push(buildTestTelegram('resolved', a));
+  const events = collectEvents(prevAlarms, attention, resolved, opts.suppressedIds);
   const physical = (mode === 'normal');
   return {
     state: { alarms },
     signaltower: physical ? computeSignaltower(alarms) : { mode: 'off' },
     mqtt: { list: buildList(deviceId, alarms, ts), new: physical ? buildNew(attention, ts) : null },
-    telegrams,
+    events,
   };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SCHEMA_VERSION, LIST_MAX_BYTES, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
-    computeSignaltower, buildList, buildNew, buildHeartbeat, buildTestTelegram, computeOutputs, utf8Bytes,
+    computeSignaltower, buildList, buildNew, buildHeartbeat, collectEvents, computeOutputs, utf8Bytes,
   };
 }
 
