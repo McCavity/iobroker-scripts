@@ -270,3 +270,4 @@ on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, change: 'ne' }, (obj) => {
 //  Initialisierungs-Log
 // ============================================================================
 log('scenes.lighting.smart-switches geladen — 7 Switches + 1 Motion-Trigger aktiv', 'info');
+

@@ -48,7 +48,7 @@ const MUTE_LIST = [
     // 'zigbee.0.003c84fffeb3ecd1',  // Fernbedienung Sassi — wenn Status final geklärt
 ];
 
-const SCHEDULE_CRON = '5 * * * *';   // Min. 5 jeder Stunde
+const SCHEDULE_CRON = '5 9 * * *';   // 09:05 jeden Tag
 
 // --- Hilfsfunktionen ---------------------------------------------------------
 
