@@ -348,3 +348,11 @@ test('grafanaWatch: Ausfall ≥ 5 min → einmal down, dann einmal up', () => {
   r = C.grafanaWatch(s, true, 7 * 60000);       assert.equal(r.message, 'up');
   assert.deepEqual(r.next, {down_since: null, notified: false});
 });
+
+test('dueReminder: intervalMs 0 → sofort fällig (0 ist gültige Dauer, kein Default)', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 1000}, [{acked:false}], 1000, 'normal', 0), true);
+});
+test('grafanaWatch: thresholdMs 0 → down beim ersten Fehlschlag', () => {
+  const r = C.grafanaWatch({down_since: null, notified: false}, false, 1000, 0);
+  assert.equal(r.message, 'down');
+});

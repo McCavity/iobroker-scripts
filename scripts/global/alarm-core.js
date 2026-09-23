@@ -201,12 +201,13 @@ function dueReminder(notify, alarms, nowMs, mode, intervalMs) {
   if (mode === 'maintenance') return false;
   if (!notify || typeof notify.last_unacked_notify !== 'number') return false;
   if (!(alarms || []).some(a => !a.acked)) return false;
-  return nowMs - notify.last_unacked_notify >= (intervalMs || REMINDER_MS);
+  const interval = (typeof intervalMs === 'number') ? intervalMs : REMINDER_MS;
+  return nowMs - notify.last_unacked_notify >= interval;
 }
 
 // Gegenseitige Überwachung: Grafana tot, ioBroker lebt → der Orchestrator meldet es.
 function grafanaWatch(prev, grafanaOk, nowMs, thresholdMs) {
-  const limit = thresholdMs || GRAFANA_DOWN_MS;
+  const limit = (typeof thresholdMs === 'number') ? thresholdMs : GRAFANA_DOWN_MS;
   const p = prev || { down_since: null, notified: false };
   if (grafanaOk) {
     return { next: { down_since: null, notified: false }, message: p.notified ? 'up' : null };
