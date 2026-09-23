@@ -112,3 +112,22 @@ test('mapGrafanaAlerts: leere/Nicht-Array-Eingabe → leeres Ergebnis (kein Cras
   assert.deepEqual(G.mapGrafanaAlerts(null, NOW), { alarms: [], dropped: [] });
   assert.deepEqual(G.mapGrafanaAlerts(undefined, NOW), { alarms: [], dropped: [] });
 });
+
+test('suppressedIds: nur suppressed mit fingerprint', () => {
+  const { suppressedIds } = require('../scripts/common/alarm-source-grafana.js');
+  const dropped = [
+    { reason: 'not-active', state: 'suppressed', fingerprint: 'f1' },
+    { reason: 'not-active', state: 'unprocessed', fingerprint: 'f2' },
+    { reason: 'not-active', state: 'suppressed', fingerprint: undefined },
+    { reason: 'no-fingerprint', name: 'x' },
+  ];
+  assert.deepEqual(suppressedIds(dropped), ['f1']);
+});
+
+test('suppressedIds: echter Alertmanager-Datensatz mit status.state=suppressed landet in dropped', () => {
+  const { mapGrafanaAlerts, suppressedIds } = require('../scripts/common/alarm-source-grafana.js');
+  const raw = [{ fingerprint: 'abc', status: { state: 'suppressed' }, labels: { alertname: 'x' }, annotations: {} }];
+  const { alarms, dropped } = mapGrafanaAlerts(raw, '2026-09-23T10:00:00Z');
+  assert.equal(alarms.length, 0);
+  assert.deepEqual(suppressedIds(dropped), ['abc']);
+});

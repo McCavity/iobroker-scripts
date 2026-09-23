@@ -8,7 +8,10 @@
 // Pure Alarm-Orchestrator-Logik. KEINE ioBroker-Globals zur Ladezeit (node-testbar).
 // In ioBroker als Global-Skript: die Funktionen liegen damit im Scope aller Skripte.
 const SCHEMA_VERSION = 1;
+const LIST_MAX_BYTES = 7000;   // unter dem 8192-Byte-MQTT-Puffer des Buttons (MqttLink.h)
 const SEV_RANK = { info: 0, warning: 1, critical: 2 };
+const REMINDER_MS = 4 * 3600 * 1000;
+const GRAFANA_DOWN_MS = 5 * 60 * 1000;
 
 function severityRank(sev) {
   return Object.prototype.hasOwnProperty.call(SEV_RANK, sev) ? SEV_RANK[sev] : SEV_RANK.warning;
@@ -61,16 +64,41 @@ function computeSignaltower(alarms) {
   return { mode: 'off' };
 }
 
-function buildList(deviceId, alarms, ts) {
+// UTF-8-Bytelänge ohne Annahme über den Sandbox-Scope: Buffer, falls vorhanden, sonst
+// encodeURIComponent-Zählung (Umlaute/Emoji zählen dann ebenfalls mehrbytig).
+function utf8Bytes(s) {
+  if (typeof Buffer !== 'undefined') return Buffer.byteLength(s, 'utf8');
+  return unescape(encodeURIComponent(s)).length;
+}
+
+function listEntry(a, ts) {
   return {
-    schema_version: SCHEMA_VERSION, device_id: deviceId, ts,
-    count: alarms.length, max_severity: maxSeverity(alarms),
-    alarms: alarms.map(a => ({
-      id: a.id, host: a.host, name: a.name, severity: a.severity,
-      summary: a.summary || '', since: a.since || ts, runbook_url: a.runbook_url || null,
-      acked: !!a.acked,   // Contract §3.1 (additiv, schema bleibt 1): Button kennt den Quittier-Stand
-    })),
+    id: a.id, host: a.host, name: a.name, severity: a.severity,
+    summary: a.summary || '', since: a.since || ts, runbook_url: a.runbook_url || null,
+    acked: !!a.acked,   // Contract §3.1 (additiv, schema bleibt 1): Button kennt den Quittier-Stand
   };
+}
+
+// Byte-Budget: alarms[] kommt sortiert (critical zuerst, dann älteste zuerst). Bei Überlauf
+// fallen die letzten Einträge heraus (= jüngste Warnungen) und werden ehrlich gezählt, statt
+// den Button-Puffer still zu sprengen. count ≡ ausgelieferte alarms.length (Lehre 29.06.).
+function buildList(deviceId, alarms, ts, maxBytes) {
+  const budget = (typeof maxBytes === 'number') ? maxBytes : LIST_MAX_BYTES;
+  const entries = alarms.map(a => listEntry(a, ts));
+  const make = (n) => ({
+    schema_version: SCHEMA_VERSION, device_id: deviceId, ts,
+    count: n, max_severity: maxSeverity(alarms),
+    omitted: alarms.length - n,
+    omitted_unacked: alarms.slice(n).filter(a => !a.acked).length,
+    alarms: entries.slice(0, n),
+  });
+  let n = entries.length;
+  let out = make(n);
+  while (n > 0 && utf8Bytes(JSON.stringify(out)) > budget) {
+    n -= 1;
+    out = make(n);
+  }
+  return out;
 }
 
 function buildNew(attention, ts) {
@@ -88,17 +116,21 @@ function buildHeartbeat(grafanaOk, pollAgeS, ts) {
   };
 }
 
-function buildTestTelegram(kind, alarm) {
-  const sev = alarm ? alarm.severity : '';
-  if (kind === 'fired')     return `🔔 TEST-Alarm (${sev}) ausgelöst — Selbsttest Alarmkette`;
-  if (kind === 'escalated') return `🔔 TEST-Alarm eskaliert auf ${sev}`;
-  if (kind === 'resolved')  return `✅ TEST-Alarm Entwarnung — Selbsttest beendet`;
-  return '';
+// Ereignisse für die Telegram-Sammelnachricht (Phase 2, Strang 3). Quelle ist reconcile():
+// attention = neu ODER eskaliert (ACK-Reset nach ISA-18.2), resolved = nicht mehr gemeldet.
+// Verschwindet ein Alarm, weil Grafana ihn per Silence unterdrückt, ist das KEIN OK.
+function collectEvents(prevAlarms, attention, resolved, suppressedIds) {
+  const prevIds = new Set((prevAlarms || []).map(a => a.id));
+  const suppressed = new Set(suppressedIds || []);
+  const events = [];
+  for (const a of attention) events.push({ kind: prevIds.has(a.id) ? 'escalated' : 'fired', alarm: a });
+  for (const a of resolved) events.push({ kind: suppressed.has(a.id) ? 'silenced' : 'resolved', alarm: a });
+  return events;
 }
 
-// Integration: prev-State + Quellen + Ack + Mode → { state, signaltower, mqtt, telegrams }.
-// Mode-Hook: away/maintenance unterdrücken physische/hörbare Ausgänge (signaltower + new-Beep),
-// Test-Telegram + state-Wahrheit bleiben.
+// Integration: prev-State + Quellen + Ack + Mode → { state, signaltower, mqtt, events }.
+// Mode-Hook: away/maintenance unterdrücken physische/hörbare Ausgänge (signaltower + new-Beep);
+// Ereignisse + state-Wahrheit bleiben.
 function computeOutputs(prevState, sourcesMap, opts) {
   const ts = opts.ts, deviceId = opts.deviceId, mode = opts.mode || 'normal';
   const prevAlarms = (prevState && prevState.alarms) || [];
@@ -107,25 +139,104 @@ function computeOutputs(prevState, sourcesMap, opts) {
   // Präzedenz: opts.ackId (Einzel, Phase 1b) vor opts.ack (alle). Beide leer → kein Ack.
   if (opts.ackId) alarms = applyAck(alarms, opts.ackId);
   else if (opts.ack) alarms = applyAck(alarms);
-  const telegrams = [];
-  for (const a of attention) if (a.source === 'test') {
-    const wasPresent = prevAlarms.some(p => p.id === a.id);
-    telegrams.push(buildTestTelegram(wasPresent ? 'escalated' : 'fired', a));
-  }
-  for (const a of resolved) if (a.source === 'test') telegrams.push(buildTestTelegram('resolved', a));
+  const events = collectEvents(prevAlarms, attention, resolved, opts.suppressedIds);
   const physical = (mode === 'normal');
   return {
     state: { alarms },
     signaltower: physical ? computeSignaltower(alarms) : { mode: 'off' },
     mqtt: { list: buildList(deviceId, alarms, ts), new: physical ? buildNew(attention, ts) : null },
-    telegrams,
+    events,
   };
+}
+
+const DIGEST_SECTIONS = [
+  { kind: 'fired',     icon: '🔴', title: 'NEU' },
+  { kind: 'escalated', icon: '⬆️', title: 'ESKALIERT' },
+  { kind: 'resolved',  icon: '✅', title: 'OK' },
+  { kind: 'silenced',  icon: '🔕', title: 'STUMM (Grafana)' },
+];
+
+function alarmLine(a) {
+  return `${a.host}: ${a.name} (${a.severity})`;
+}
+
+// Eine Sammelnachricht je Auswertungsfenster. Feste Reihenfolge, damit das Wichtige oben steht.
+function formatDigest(events, opts) {
+  if (!events || !events.length) return null;
+  const prefix = (opts && opts.prefix) || '';
+  const max = (opts && opts.max) || 15;
+  const lines = [];
+  let shown = 0, hidden = 0;
+  for (const sec of DIGEST_SECTIONS) {
+    const inSec = events.filter(e => e.kind === sec.kind);
+    if (!inSec.length) continue;
+    lines.push(`${sec.icon} ${sec.title} (${inSec.length})`);
+    for (const e of inSec) {
+      if (shown < max) { lines.push(`${sec.icon} ${alarmLine(e.alarm)}`); shown++; }
+      else hidden++;
+    }
+  }
+  if (hidden) lines.push(`… und ${hidden} weitere`);
+  return prefix + 'Alarmkette\n' + lines.join('\n');
+}
+
+// Erinnerung und „Wartung beendet": Zustand statt Ereignis.
+function formatOpenList(title, alarms, opts) {
+  const prefix = (opts && opts.prefix) || '';
+  const max = (opts && opts.max) || 15;
+  const unacked = alarms.filter(a => !a.acked).length;
+  const lines = [`${prefix}${title} — ${alarms.length} offen, davon ${unacked} unquittiert`];
+  // Unquittierte zuerst (stabile Reihenfolge je Gruppe), damit sie bei Kürzung nicht herausfallen.
+  const ordered = alarms.filter(a => !a.acked).concat(alarms.filter(a => a.acked));
+  ordered.slice(0, max).forEach(a => lines.push(`${a.acked ? '☑️' : '🔴'} ${alarmLine(a)}`));
+  if (ordered.length > max) lines.push(`… und ${ordered.length - max} weitere`);
+  return lines.join('\n');
+}
+
+function touchesUnacked(events) {
+  return (events || []).some(e => e.kind === 'fired' || e.kind === 'escalated');
+}
+
+// Setzt den Erinnerungstakt nur zurück, wenn die Sammelnachricht ALLE derzeit
+// unquittierten Alarme als neu/eskaliert nennt — sonst verdeckt ein flatternder
+// Alarm die Erinnerung an einen alten unquittierten (Final-Review 23.09.).
+function coversAllUnacked(events, alarms) {
+  const named = new Set((events || [])
+    .filter(e => e.kind === 'fired' || e.kind === 'escalated')
+    .map(e => e.alarm && e.alarm.id));
+  if (named.size === 0) return false;
+  const unackedIds = (alarms || []).filter(a => !a.acked).map(a => a.id);
+  return unackedIds.every(id => named.has(id));
+}
+
+// Erinnerung nur für unquittierte Alarme; maintenance unterdrückt sie (away nicht).
+// Fehlender Takt (Erstlauf) ist NICHT fällig — der Orchestrator initialisiert ihn beim Laden.
+function dueReminder(notify, alarms, nowMs, mode, intervalMs) {
+  if (mode === 'maintenance') return false;
+  if (!notify || typeof notify.last_unacked_notify !== 'number') return false;
+  if (!(alarms || []).some(a => !a.acked)) return false;
+  const interval = (typeof intervalMs === 'number') ? intervalMs : REMINDER_MS;
+  return nowMs - notify.last_unacked_notify >= interval;
+}
+
+// Gegenseitige Überwachung: Grafana tot, ioBroker lebt → der Orchestrator meldet es.
+function grafanaWatch(prev, grafanaOk, nowMs, thresholdMs) {
+  const limit = (typeof thresholdMs === 'number') ? thresholdMs : GRAFANA_DOWN_MS;
+  const p = prev || { down_since: null, notified: false };
+  if (grafanaOk) {
+    return { next: { down_since: null, notified: false }, message: p.notified ? 'up' : null };
+  }
+  const since = (p.down_since === null || p.down_since === undefined) ? nowMs : p.down_since;
+  if (!p.notified && nowMs - since >= limit) return { next: { down_since: since, notified: true }, message: 'down' };
+  return { next: { down_since: since, notified: p.notified }, message: null };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
-    computeSignaltower, buildList, buildNew, buildHeartbeat, buildTestTelegram, computeOutputs,
+    SCHEMA_VERSION, LIST_MAX_BYTES, REMINDER_MS, GRAFANA_DOWN_MS, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
+    computeSignaltower, buildList, buildNew, buildHeartbeat, collectEvents, computeOutputs, utf8Bytes,
+    formatDigest, formatOpenList, touchesUnacked, coversAllUnacked, alarmLine, dueReminder, grafanaWatch,
   };
 }
+
 

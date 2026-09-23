@@ -104,13 +104,13 @@ test('buildNew: null wenn keine attention, sonst count+max', () => {
   assert.deepEqual(C.buildNew([{severity:'critical'}], TS), {schema_version:1, ts:TS, count_new:1, max_severity:'critical'});
 });
 
-test('computeOutputs: Test-Alarm fired → fast_blink, new gesetzt, Test-Telegram 🔔', () => {
+test('computeOutputs: Test-Alarm fired → fast_blink, new gesetzt, Ereignis fired', () => {
   const r = C.computeOutputs({alarms:[]}, {test:[{id:'t1',host:'TEST',name:'Selbsttest',severity:'warning',since:TS}]},
     {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
   assert.ok(r.mqtt.new && r.mqtt.new.count_new === 1);
-  assert.equal(r.telegrams.length, 1);
-  assert.match(r.telegrams[0], /🔔.*warning/);
+  assert.deepEqual(r.events.map(e => e.kind), ['fired']);
+  assert.equal(r.events[0].alarm.id, 't1');
   assert.equal(r.state.alarms[0].acked, false);
 });
 
@@ -122,29 +122,29 @@ test('computeOutputs: ack → signaltower on, kein new', () => {
   assert.equal(r.mqtt.new, null);
 });
 
-test('computeOutputs: Test-Alarm resolved → off, Test-Telegram ✅', () => {
+test('computeOutputs: Test-Alarm resolved → off, Ereignis resolved', () => {
   const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:false}]};
   const r = C.computeOutputs(prev, {test:[]}, {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {mode:'off'});
-  assert.equal(r.telegrams.length, 1);
-  assert.match(r.telegrams[0], /✅/);
+  assert.deepEqual(r.events.map(e => e.kind), ['resolved']);
 });
 
-test('computeOutputs: Eskalation warning→critical → erneute attention + Telegram', () => {
+test('computeOutputs: Eskalation warning→critical → Ereignis escalated', () => {
   const prev = {alarms:[{id:'t1',host:'TEST',name:'n',severity:'warning',source:'test',acked:true}]};
   const r = C.computeOutputs(prev, {test:[{id:'t1',host:'TEST',name:'n',severity:'critical'}]},
     {ack:false, mode:'normal', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {colour:'AMBER', mode:'fast_blink'});
   assert.equal(r.mqtt.new.count_new, 1);
-  assert.match(r.telegrams[0], /eskaliert auf critical/);
+  assert.deepEqual(r.events.map(e => e.kind), ['escalated']);
+  assert.equal(r.events[0].alarm.severity, 'critical');
 });
 
-test('computeOutputs: mode=away unterdrückt signaltower + new, Telegram bleibt, state aktualisiert', () => {
+test('computeOutputs: mode=away unterdrückt signaltower + new, Ereignisse bleiben', () => {
   const r = C.computeOutputs({alarms:[]}, {test:[{id:'t1',host:'TEST',name:'n',severity:'warning',since:TS}]},
     {ack:false, mode:'away', ts:TS, deviceId:'werkstatt'});
   assert.deepEqual(r.signaltower, {mode:'off'});
   assert.equal(r.mqtt.new, null);
-  assert.equal(r.telegrams.length, 1);
+  assert.equal(r.events.length, 1);
   assert.equal(r.state.alarms.length, 1);
 });
 
@@ -204,4 +204,231 @@ test('computeOutputs: ackId hat Präzedenz vor ack (nur der eine, nicht alle)', 
   ]}, {ack:true, ackId:'a', mode:'normal', ts:TS, deviceId:'office'});
   assert.equal(r.state.alarms.find(x => x.id === 'a').acked, true);
   assert.equal(r.state.alarms.find(x => x.id === 'b').acked, false);
+});
+
+function manyAlarms(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({
+    id: 'id' + String(i).padStart(3, '0'), host: 'host' + i, name: 'Alarmname Nummer ' + i,
+    severity: i < 3 ? 'critical' : 'warning',
+    summary: 'Eine typische Grafana-Zusammenfassung mit gut hundert Zeichen Länge, damit das Budget realistisch greift ' + i,
+    since: '2026-09-23T10:00:00Z', acked: i % 2 === 0,
+  });
+  return out;
+}
+
+test('buildList: unter Budget → alles drin, omitted 0', () => {
+  const l = C.buildList('office', manyAlarms(3), TS);
+  assert.equal(l.count, 3);
+  assert.equal(l.alarms.length, 3);
+  assert.equal(l.omitted, 0);
+  assert.equal(l.omitted_unacked, 0);
+});
+
+test('buildList: über Budget → kürzt vom Ende, zählt omitted + omitted_unacked, JSON paßt', () => {
+  const all = manyAlarms(60);
+  const l = C.buildList('office', all, TS, 7000);
+  assert.ok(Buffer.byteLength(JSON.stringify(l), 'utf8') <= 7000);
+  assert.ok(l.omitted > 0);
+  assert.equal(l.count, l.alarms.length);                 // Invariante count ≡ alarms.length
+  assert.equal(l.count + l.omitted, 60);
+  const dropped = all.slice(l.alarms.length);
+  assert.equal(l.omitted_unacked, dropped.filter(a => !a.acked).length);
+  assert.deepEqual(l.alarms.map(a => a.id), all.slice(0, l.alarms.length).map(a => a.id)); // Reihenfolge = Sortierung
+  assert.equal(l.max_severity, 'critical');
+});
+
+test('buildList: kritische Alarme fallen nie vor Warnungen heraus', () => {
+  const l = C.buildList('office', manyAlarms(60), TS, 7000);
+  assert.equal(l.alarms.filter(a => a.severity === 'critical').length, 3);
+});
+
+test('utf8Bytes: Umlaut und Emoji zählen mehrbytig', () => {
+  assert.equal(C.utf8Bytes('aä🔴'), 1 + 2 + 4);
+});
+
+test('utf8Bytes: Fallback-Zweig ohne Buffer im Scope liefert dieselbe Bytezahl', () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const src = fs.readFileSync(require.resolve('../scripts/global/alarm-core.js'), 'utf8');
+  const sandbox = { module: undefined, unescape, encodeURIComponent, Buffer: undefined };
+  vm.createContext(sandbox);
+  vm.runInContext(src + '\n;this.__utf8Bytes = utf8Bytes;', sandbox);
+  assert.equal(sandbox.__utf8Bytes('aä🔴'), 7);
+});
+
+test('computeOutputs: Grafana-Alarm verschwindet per Silence → silenced, nicht resolved', () => {
+  const prev = {alarms:[{id:'g1',host:'h',name:'n',severity:'warning',source:'grafana',acked:true}]};
+  const r = C.computeOutputs(prev, {grafana:[]},
+    {ack:false, mode:'normal', ts:TS, deviceId:'office', suppressedIds:['g1']});
+  assert.deepEqual(r.events.map(e => e.kind), ['silenced']);
+});
+
+test('computeOutputs: quittierter Alarm ohne Änderung → keine Ereignisse', () => {
+  const prev = {alarms:[{id:'g1',host:'h',name:'n',severity:'warning',source:'grafana',acked:true}]};
+  const r = C.computeOutputs(prev, {grafana:[{id:'g1',host:'h',name:'n',severity:'warning'}]},
+    {ack:false, mode:'normal', ts:TS, deviceId:'office'});
+  assert.deepEqual(r.events, []);
+});
+
+test('collectEvents: quittierter Alarm, der endet → resolved (Entwarnung auch nach ACK)', () => {
+  const ev = C.collectEvents([{id:'a',acked:true}], [], [{id:'a',acked:true}], []);
+  assert.deepEqual(ev.map(e => e.kind), ['resolved']);
+});
+
+const A = (id, sev, extra) => Object.assign({id, host:'h'+id, name:'Alarm '+id, severity:sev}, extra || {});
+
+test('formatDigest: leer → null', () => {
+  assert.equal(C.formatDigest([], {}), null);
+});
+
+test('formatDigest: gliedert neu / eskaliert / OK / stumm in fester Reihenfolge, mit Präfix', () => {
+  const txt = C.formatDigest([
+    {kind:'resolved', alarm:A('1','warning')},
+    {kind:'fired', alarm:A('2','critical')},
+    {kind:'silenced', alarm:A('3','warning')},
+    {kind:'escalated', alarm:A('4','critical')},
+  ], {prefix:'[neu] '});
+  assert.ok(txt.startsWith('[neu] '));
+  const iNew = txt.indexOf('🔴'), iEsc = txt.indexOf('⬆️'), iOk = txt.indexOf('✅'), iMute = txt.indexOf('🔕');
+  assert.ok(iNew >= 0 && iNew < iEsc && iEsc < iOk && iOk < iMute);
+  assert.match(txt, /h2: Alarm 2 \(critical\)/);
+});
+
+test('formatDigest: feuert und endet im selben Fenster → beide Zeilen', () => {
+  const txt = C.formatDigest([{kind:'fired', alarm:A('1','warning')}, {kind:'resolved', alarm:A('1','warning')}], {});
+  assert.match(txt, /🔴/);
+  assert.match(txt, /✅/);
+});
+
+test('formatDigest: Obergrenze → "… und N weitere"', () => {
+  const ev = [];
+  for (let i = 0; i < 22; i++) ev.push({kind:'fired', alarm:A(String(i),'warning')});
+  const txt = C.formatDigest(ev, {max:15});
+  assert.match(txt, /… und 7 weitere/);
+  assert.equal((txt.match(/^🔴 h/gm) || []).length, 15);
+});
+
+test('formatOpenList: Titel, Zählung unquittiert, Obergrenze', () => {
+  const alarms = [A('1','critical',{acked:false}), A('2','warning',{acked:true})];
+  const txt = C.formatOpenList('⏰ Erinnerung', alarms, {prefix:'[neu] '});
+  assert.ok(txt.startsWith('[neu] ⏰ Erinnerung'));
+  assert.match(txt, /2 offen, davon 1 unquittiert/);
+  assert.match(txt, /h1: Alarm 1 \(critical\)/);
+});
+
+test('formatOpenList: unquittierte zuerst, dann quittierte (stabile Reihenfolge je Gruppe)', () => {
+  const alarms = [
+    A('1','warning',{acked:true}),
+    A('2','warning',{acked:false}),
+    A('3','warning',{acked:true}),
+    A('4','warning',{acked:false}),
+  ];
+  const txt = C.formatOpenList('Titel', alarms, {});
+  const lines = txt.split('\n').slice(1);   // erste Zeile ist der Kopf
+  assert.deepEqual(lines.map(l => l.includes('h2') ? '2' : l.includes('h4') ? '4' : l.includes('h1') ? '1' : '3'),
+    ['2', '4', '1', '3']);
+});
+
+test('formatOpenList: 20 Alarme, der einzige unquittierte steht in der Eingabe zuletzt → erscheint im Text', () => {
+  const alarms = [];
+  for (let i = 0; i < 19; i++) alarms.push(A(String(i), 'warning', {acked:true}));
+  alarms.push(A('unacked', 'warning', {acked:false}));
+  const txt = C.formatOpenList('Titel', alarms, {max: 15});
+  assert.match(txt, /hunacked: Alarm unacked \(warning\)/);
+});
+
+test('formatOpenList: Obergrenze → "… und N weitere" bei max=15, 20 Alarmen', () => {
+  const alarms = [];
+  for (let i = 0; i < 20; i++) alarms.push(A(String(i).padStart(2,'0'), 'warning', {acked:true}));
+  const txt = C.formatOpenList('Titel', alarms, {max: 15});
+  assert.match(txt, /… und 5 weitere/);
+});
+
+test('touchesUnacked: nur fired/escalated setzen den Erinnerungstakt zurück', () => {
+  assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'silenced'}]), false);
+  assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'fired'}]), true);
+  assert.equal(C.touchesUnacked([{kind:'escalated'}]), true);
+});
+
+test('coversAllUnacked: flatternde Warnung feuert, älterer unquittierter Critical bleibt außen vor → false', () => {
+  const alarms = [
+    {id:'critical-alt', acked:false},
+    {id:'warn-flap', acked:false},
+  ];
+  const events = [{kind:'fired', alarm:{id:'warn-flap'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), false);
+});
+
+test('coversAllUnacked: Sammelnachricht nennt jeden unquittierten Alarm → true', () => {
+  const alarms = [
+    {id:'a', acked:false},
+    {id:'b', acked:false},
+  ];
+  const events = [
+    {kind:'fired', alarm:{id:'a'}},
+    {kind:'escalated', alarm:{id:'b'}},
+  ];
+  assert.equal(C.coversAllUnacked(events, alarms), true);
+});
+
+test('coversAllUnacked: keine fired/escalated Events → false', () => {
+  const alarms = [{id:'a', acked:false}];
+  const events = [{kind:'resolved', alarm:{id:'a'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), false);
+});
+
+test('coversAllUnacked: alle Alarme quittiert, ein fired → true (leere Deckungsmenge ist erfüllt)', () => {
+  const alarms = [{id:'a', acked:true}, {id:'b', acked:true}];
+  const events = [{kind:'fired', alarm:{id:'a'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), true);
+});
+
+test('coversAllUnacked: fired nennt einen unquittierten, aber ein zweiter unquittierter bleibt ungenannt → false', () => {
+  const alarms = [{id:'a', acked:false}, {id:'b', acked:false}];
+  const events = [{kind:'fired', alarm:{id:'a'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), false);
+});
+
+const H = 3600 * 1000;
+
+test('dueReminder: unquittiert + 4 h still → fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 4 * H, 'normal'), true);
+});
+test('dueReminder: unter 4 h → nicht fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 4 * H - 1, 'normal'), false);
+});
+test('dueReminder: alle quittiert → nie fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:true}], 10 * H, 'normal'), false);
+});
+test('dueReminder: maintenance → nie fällig; away → fällig', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 10 * H, 'maintenance'), false);
+  assert.equal(C.dueReminder({last_unacked_notify: 0}, [{acked:false}], 10 * H, 'away'), true);
+});
+test('dueReminder: fehlendes notify → nicht fällig (Erstlauf ohne Sturm)', () => {
+  assert.equal(C.dueReminder(null, [{acked:false}], 10 * H, 'normal'), false);
+});
+
+test('grafanaWatch: kurzer Ausfall unter Schwelle → keine Meldung, auch keine Entwarnung', () => {
+  let s = {down_since: null, notified: false};
+  let r = C.grafanaWatch(s, false, 0);            s = r.next; assert.equal(r.message, null);
+  r = C.grafanaWatch(s, false, 5 * 60000 - 1);    s = r.next; assert.equal(r.message, null);
+  r = C.grafanaWatch(s, true, 5 * 60000);         assert.equal(r.message, null);
+  assert.deepEqual(r.next, {down_since: null, notified: false});
+});
+test('grafanaWatch: Ausfall ≥ 5 min → einmal down, dann einmal up', () => {
+  let s = {down_since: null, notified: false};
+  let r = C.grafanaWatch(s, false, 0);          s = r.next;
+  r = C.grafanaWatch(s, false, 5 * 60000);      s = r.next; assert.equal(r.message, 'down');
+  r = C.grafanaWatch(s, false, 6 * 60000);      s = r.next; assert.equal(r.message, null);   // nicht wiederholen
+  r = C.grafanaWatch(s, true, 7 * 60000);       assert.equal(r.message, 'up');
+  assert.deepEqual(r.next, {down_since: null, notified: false});
+});
+
+test('dueReminder: intervalMs 0 → sofort fällig (0 ist gültige Dauer, kein Default)', () => {
+  assert.equal(C.dueReminder({last_unacked_notify: 1000}, [{acked:false}], 1000, 'normal', 0), true);
+});
+test('grafanaWatch: thresholdMs 0 → down beim ersten Fehlschlag', () => {
+  const r = C.grafanaWatch({down_since: null, notified: false}, false, 1000, 0);
+  assert.equal(r.message, 'down');
 });

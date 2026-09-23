@@ -6,7 +6,7 @@
  * expert:     true
  */
 // Orchestrator: sources.* + ack + mode → computeOutputs (Global alarm-core)
-// → Signaltower (Global signaltower-helpers) + rote Rundumleuchte + Test-Telegram + state.
+// → Signaltower (Global signaltower-helpers) + rote Rundumleuchte + Telegram-Sammelnachricht (Phase 2) + state.
 const DP = '0_userdata.0.alerting.';
 const DEVICE_ID = 'office';                // Standort des Buttons (Slice 2: war 'werkstatt')
 const SOURCES = ['test', 'grafana'];      // beide Quellen aktiv
@@ -14,8 +14,16 @@ const PERSIST = -1;                        // rbhapp01: duration -1 = dauerhaft 
 const SONOFF_BEACON = 'sonoff.0.Alarm.POWER';  // rote Rundumleuchte — folgt dem Signaltower-fast_blink
 const MQTT_TOPIC = 'alarmbutton/' + DEVICE_ID + '/';    // Slice 2: Publish via mqtt.0-Messagebox (sendMessage2Client)
 const HEARTBEAT_MS = 15000;                // Slice 2: Lebenszeichen + list-Republish (retain=false-Workaround)
+const TG_PREFIX = '[neu] ';               // Parallelbetrieb zu Grafana; die Umschaltung (G4) leert ihn
+const DIGEST_WINDOW_MS = 30000;           // eine Sammelnachricht je Auswertungsfenster
+const TELEGRAM_ALIVE = 'system.adapter.telegram.0.alive';
 
 let currentState = { alarms: [] };         // im Speicher (spart getState aufs state-DP)
+let notify = null;                         // {last_unacked_notify: ms}, persistiert in alerting.notify
+let grafanaState = { down_since: null, notified: false };
+let lastMode = 'normal';
+let pendingEvents = [];
+let flushTimer = null;
 
 // Datenpunkte idempotent anlegen (auch die sources, damit Reads nie ins Leere laufen)
 createState(DP + 'ack', false, { name: 'alerting ack', type: 'boolean', role: 'button', read: true, write: true });
@@ -23,6 +31,8 @@ createState(DP + 'ack_one', '', { name: 'alerting ack_one', type: 'string', role
 createState(DP + 'mode', 'normal', { name: 'alerting mode', type: 'string', role: 'state', read: true, write: true });
 createState(DP + 'state', '{"alarms":[]}', { name: 'alerting state', type: 'string', role: 'json', read: true, write: true });
 SOURCES.forEach(s => createState(DP + 'sources.' + s, '[]', { name: 'alerting sources.' + s, type: 'string', role: 'json', read: true, write: true }));
+createState(DP + 'notify', '', { name: 'alerting notify', type: 'string', role: 'json', read: true, write: true });
+createState(DP + 'orchestrator.alive', 0, { name: 'alerting orchestrator.alive', type: 'number', role: 'value', read: true, write: true });
 
 // existsState-Guard VOR getState → kein WARN auf (noch) nicht gesetzte States (battery-check-Lektion 27.05.)
 function readJson(id, fallback) {
@@ -71,26 +81,78 @@ function publishHeartbeat() {
   const ageS = lastOk ? Math.round((Date.now() - new Date(lastOk).getTime()) / 1000) : null;
   publishMqtt('heartbeat', buildHeartbeat(grafanaOk, ageS, ts));
   publishMqtt('list', buildList(DEVICE_ID, currentState.alarms, ts));
+  // Erinnerung für unquittierte Alarme (4 h, nicht in maintenance)
+  const now = Date.now();
+  if (dueReminder(notify, currentState.alarms, now, readMode())) {
+    sendTelegram(formatOpenList('⏰ Erinnerung', currentState.alarms, { prefix: TG_PREFIX }));
+    notify.last_unacked_notify = now;
+    saveNotify();
+  }
+  // Gegenseitige Überwachung: Grafana. grafana.ok bleibt true, wenn der Poller
+  // (alarm-source-grafana) stirbt — deshalb zusätzlich das Alter von last_ok prüfen:
+  // ageS < 60 s = maximal vier verpaßte 15-s-Polls, sonst gilt der Poller als tot.
+  const gw = grafanaWatch(grafanaState, grafanaOk && ageS !== null && ageS < 60, now);
+  grafanaState = gw.next;
+  if (gw.message === 'down') sendTelegram(TG_PREFIX + '⚠️ Grafana-Daten seit 5 min nicht aktuell (Grafana oder Poller) — Alarmliste ist eingefroren');
+  if (gw.message === 'up') sendTelegram(TG_PREFIX + '✅ Grafana wieder erreichbar');
+  // Dead-Man-Signal für Grafana (G1): 1 = Orchestrator lebt UND Telegram-Adapter lebt
+  const tgAlive = existsState(TELEGRAM_ALIVE) && !!(getState(TELEGRAM_ALIVE) || {}).val;
+  setState(DP + 'orchestrator.alive', tgAlive ? 1 : 0, true);
+}
+
+function sendTelegram(text) {
+  if (!text) return;
+  sendTo('telegram.0', { text }, (res) => {
+    if (res && res.error) log('alarm-orchestrator: Telegram-Versand fehlgeschlagen: ' + res.error, 'warn');
+  });
+}
+function saveNotify() {
+  setState(DP + 'notify', JSON.stringify(notify), true);
+}
+function readSuppressed() {
+  return readJson(DP + 'grafana.suppressed', []);
+}
+function flushDigest() {
+  flushTimer = null;
+  const events = pendingEvents;
+  pendingEvents = [];
+  const text = formatDigest(events, { prefix: TG_PREFIX });
+  if (!text) return;
+  // Nur zurücksetzen, wenn die Sammelnachricht wirklich JEDEN unquittierten Alarm nennt —
+  // sonst verdeckt ein flatternder Alarm die Erinnerung an einen alten unquittierten (Final-Review 23.09.).
+  if (coversAllUnacked(events, currentState.alarms)) { notify.last_unacked_notify = Date.now(); saveNotify(); }
+  sendTelegram(text);
+}
+function queueEvents(events) {
+  if (!events || !events.length) return;
+  pendingEvents = pendingEvents.concat(events);
+  if (!flushTimer) flushTimer = setTimeout(flushDigest, DIGEST_WINDOW_MS);
 }
 
 function drive(ackPressed, ackId) {
   const out = computeOutputs(currentState, readSources(),
-    { ack: !!ackPressed, ackId: ackId, mode: readMode(), ts: new Date().toISOString(), deviceId: DEVICE_ID });
+    { ack: !!ackPressed, ackId: ackId, mode: readMode(), ts: new Date().toISOString(), deviceId: DEVICE_ID, suppressedIds: readSuppressed() });
   currentState = out.state;
   setState(DP + 'state', JSON.stringify(out.state), true);
   driveSignaltower(out.signaltower);
   driveBeacon(out.signaltower);
-  out.telegrams.forEach(msg => sendTo('telegram.0', { text: msg }));
+  queueEvents(out.events);
   // MQTT-Publish (Slice 2): list bei jeder Änderung, new nur bei neuer/eskalierter Attention.
   publishMqtt('list', out.mqtt.list);
   if (out.mqtt.new) publishMqtt('new', out.mqtt.new);
   log('alarm-orchestrator: ' + out.state.alarms.length + ' Alarm(e), ST=' + JSON.stringify(out.signaltower)
-    + (out.telegrams.length ? ', TG=' + out.telegrams.length : ''));
+    + (out.events.length ? ', EV=' + out.events.length : ''));
 }
 
 // Subscriptions + initialer Reconcile erst NACH createState-Settle (vermeidet Startup-Race)
 function ready() {
   currentState = readJson(DP + 'state', { alarms: [] });   // letzten Stand laden (Restart-fest)
+  notify = readJson(DP + 'notify', null);
+  if (!notify || typeof notify.last_unacked_notify !== 'number') {
+    notify = { last_unacked_notify: Date.now() };   // Erstlauf: Takt startet jetzt, kein Sofort-Sturm
+    saveNotify();
+  }
+  lastMode = readMode();
   SOURCES.forEach(s => on({ id: DP + 'sources.' + s }, () => drive(false)));
   on({ id: DP + 'ack', val: true }, () => { drive(true); setState(DP + 'ack', false, true); });
   on({ id: DP + 'ack_one', change: 'ne' }, () => {
@@ -99,7 +161,18 @@ function ready() {
     drive(false, id);
     setState(DP + 'ack_one', '', true);       // Reset, analog zum ack→false
   });
-  on({ id: DP + 'mode' }, () => drive(false));
+  on({ id: DP + 'mode' }, () => {
+    const mode = readMode();
+    if (lastMode === 'maintenance' && mode !== 'maintenance' && currentState.alarms.length) {
+      sendTelegram(formatOpenList('🛠️ Wartung beendet', currentState.alarms, { prefix: TG_PREFIX }));
+      if (currentState.alarms.some(a => !a.acked)) {
+        notify.last_unacked_notify = Date.now();   // „Wartung beendet" ersetzt die fällige Erinnerung
+        saveNotify();
+      }
+    }
+    lastMode = mode;
+    drive(false);
+  });
   drive(false);   // initialer Reconcile gegen die aktuellen Quellen
   setInterval(publishHeartbeat, HEARTBEAT_MS);  // Slice 2: periodisches Lebenszeichen + list-Republish
   publishHeartbeat();                            // sofort ein erstes Lebenszeichen
@@ -107,4 +180,5 @@ function ready() {
 }
 setTimeout(ready, 2000);
 log('alarm-orchestrator gestartet (init…)');
+
 
