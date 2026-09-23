@@ -153,7 +153,7 @@ const DIGEST_SECTIONS = [
   { kind: 'fired',     icon: '🔴', title: 'NEU' },
   { kind: 'escalated', icon: '⬆️', title: 'ESKALIERT' },
   { kind: 'resolved',  icon: '✅', title: 'OK' },
-  { kind: 'silenced',  icon: '🔕', title: 'STUMM (Grafana-Silence)' },
+  { kind: 'silenced',  icon: '🔕', title: 'STUMM (Grafana)' },
 ];
 
 function alarmLine(a) {
@@ -186,13 +186,27 @@ function formatOpenList(title, alarms, opts) {
   const max = (opts && opts.max) || 15;
   const unacked = alarms.filter(a => !a.acked).length;
   const lines = [`${prefix}${title} — ${alarms.length} offen, davon ${unacked} unquittiert`];
-  alarms.slice(0, max).forEach(a => lines.push(`${a.acked ? '☑️' : '🔴'} ${alarmLine(a)}`));
-  if (alarms.length > max) lines.push(`… und ${alarms.length - max} weitere`);
+  // Unquittierte zuerst (stabile Reihenfolge je Gruppe), damit sie bei Kürzung nicht herausfallen.
+  const ordered = alarms.filter(a => !a.acked).concat(alarms.filter(a => a.acked));
+  ordered.slice(0, max).forEach(a => lines.push(`${a.acked ? '☑️' : '🔴'} ${alarmLine(a)}`));
+  if (ordered.length > max) lines.push(`… und ${ordered.length - max} weitere`);
   return lines.join('\n');
 }
 
 function touchesUnacked(events) {
   return (events || []).some(e => e.kind === 'fired' || e.kind === 'escalated');
+}
+
+// Setzt den Erinnerungstakt nur zurück, wenn die Sammelnachricht ALLE derzeit
+// unquittierten Alarme als neu/eskaliert nennt — sonst verdeckt ein flatternder
+// Alarm die Erinnerung an einen alten unquittierten (Final-Review 23.09.).
+function coversAllUnacked(events, alarms) {
+  const named = new Set((events || [])
+    .filter(e => e.kind === 'fired' || e.kind === 'escalated')
+    .map(e => e.alarm && e.alarm.id));
+  if (named.size === 0) return false;
+  const unackedIds = (alarms || []).filter(a => !a.acked).map(a => a.id);
+  return unackedIds.every(id => named.has(id));
 }
 
 // Erinnerung nur für unquittierte Alarme; maintenance unterdrückt sie (away nicht).
@@ -221,7 +235,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     SCHEMA_VERSION, LIST_MAX_BYTES, REMINDER_MS, GRAFANA_DOWN_MS, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
     computeSignaltower, buildList, buildNew, buildHeartbeat, collectEvents, computeOutputs, utf8Bytes,
-    formatDigest, formatOpenList, touchesUnacked, alarmLine, dueReminder, grafanaWatch,
+    formatDigest, formatOpenList, touchesUnacked, coversAllUnacked, alarmLine, dueReminder, grafanaWatch,
   };
 }
 

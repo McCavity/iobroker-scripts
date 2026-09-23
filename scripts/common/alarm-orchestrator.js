@@ -88,10 +88,12 @@ function publishHeartbeat() {
     notify.last_unacked_notify = now;
     saveNotify();
   }
-  // Gegenseitige Überwachung: Grafana
-  const gw = grafanaWatch(grafanaState, grafanaOk, now);
+  // Gegenseitige Überwachung: Grafana. grafana.ok bleibt true, wenn der Poller
+  // (alarm-source-grafana) stirbt — deshalb zusätzlich das Alter von last_ok prüfen:
+  // ageS < 60 s = maximal vier verpaßte 15-s-Polls, sonst gilt der Poller als tot.
+  const gw = grafanaWatch(grafanaState, grafanaOk && ageS !== null && ageS < 60, now);
   grafanaState = gw.next;
-  if (gw.message === 'down') sendTelegram(TG_PREFIX + '⚠️ Grafana seit 5 min nicht erreichbar — Alarmliste ist eingefroren');
+  if (gw.message === 'down') sendTelegram(TG_PREFIX + '⚠️ Grafana-Daten seit 5 min nicht aktuell (Grafana oder Poller) — Alarmliste ist eingefroren');
   if (gw.message === 'up') sendTelegram(TG_PREFIX + '✅ Grafana wieder erreichbar');
   // Dead-Man-Signal für Grafana (G1): 1 = Orchestrator lebt UND Telegram-Adapter lebt
   const tgAlive = existsState(TELEGRAM_ALIVE) && !!(getState(TELEGRAM_ALIVE) || {}).val;
@@ -99,7 +101,10 @@ function publishHeartbeat() {
 }
 
 function sendTelegram(text) {
-  if (text) sendTo('telegram.0', { text });
+  if (!text) return;
+  sendTo('telegram.0', { text }, (res) => {
+    if (res && res.error) log('alarm-orchestrator: Telegram-Versand fehlgeschlagen: ' + res.error, 'warn');
+  });
 }
 function saveNotify() {
   setState(DP + 'notify', JSON.stringify(notify), true);
@@ -113,7 +118,9 @@ function flushDigest() {
   pendingEvents = [];
   const text = formatDigest(events, { prefix: TG_PREFIX });
   if (!text) return;
-  if (touchesUnacked(events)) { notify.last_unacked_notify = Date.now(); saveNotify(); }
+  // Nur zurücksetzen, wenn die Sammelnachricht wirklich JEDEN unquittierten Alarm nennt —
+  // sonst verdeckt ein flatternder Alarm die Erinnerung an einen alten unquittierten (Final-Review 23.09.).
+  if (coversAllUnacked(events, currentState.alarms)) { notify.last_unacked_notify = Date.now(); saveNotify(); }
   sendTelegram(text);
 }
 function queueEvents(events) {

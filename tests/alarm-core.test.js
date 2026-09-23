@@ -245,7 +245,16 @@ test('buildList: kritische Alarme fallen nie vor Warnungen heraus', () => {
 
 test('utf8Bytes: Umlaut und Emoji zählen mehrbytig', () => {
   assert.equal(C.utf8Bytes('aä🔴'), 1 + 2 + 4);
-  assert.equal(unescape(encodeURIComponent('aä🔴')).length, 7);   // Fallback-Zweig, ohne Buffer
+});
+
+test('utf8Bytes: Fallback-Zweig ohne Buffer im Scope liefert dieselbe Bytezahl', () => {
+  const vm = require('node:vm');
+  const fs = require('node:fs');
+  const src = fs.readFileSync(require.resolve('../scripts/global/alarm-core.js'), 'utf8');
+  const sandbox = { module: undefined, unescape, encodeURIComponent, Buffer: undefined };
+  vm.createContext(sandbox);
+  vm.runInContext(src + '\n;this.__utf8Bytes = utf8Bytes;', sandbox);
+  assert.equal(sandbox.__utf8Bytes('aä🔴'), 7);
 });
 
 test('computeOutputs: Grafana-Alarm verschwindet per Silence → silenced, nicht resolved', () => {
@@ -308,10 +317,77 @@ test('formatOpenList: Titel, Zählung unquittiert, Obergrenze', () => {
   assert.match(txt, /h1: Alarm 1 \(critical\)/);
 });
 
+test('formatOpenList: unquittierte zuerst, dann quittierte (stabile Reihenfolge je Gruppe)', () => {
+  const alarms = [
+    A('1','warning',{acked:true}),
+    A('2','warning',{acked:false}),
+    A('3','warning',{acked:true}),
+    A('4','warning',{acked:false}),
+  ];
+  const txt = C.formatOpenList('Titel', alarms, {});
+  const lines = txt.split('\n').slice(1);   // erste Zeile ist der Kopf
+  assert.deepEqual(lines.map(l => l.includes('h2') ? '2' : l.includes('h4') ? '4' : l.includes('h1') ? '1' : '3'),
+    ['2', '4', '1', '3']);
+});
+
+test('formatOpenList: 20 Alarme, der einzige unquittierte steht in der Eingabe zuletzt → erscheint im Text', () => {
+  const alarms = [];
+  for (let i = 0; i < 19; i++) alarms.push(A(String(i), 'warning', {acked:true}));
+  alarms.push(A('unacked', 'warning', {acked:false}));
+  const txt = C.formatOpenList('Titel', alarms, {max: 15});
+  assert.match(txt, /hunacked: Alarm unacked \(warning\)/);
+});
+
+test('formatOpenList: Obergrenze → "… und N weitere" bei max=15, 20 Alarmen', () => {
+  const alarms = [];
+  for (let i = 0; i < 20; i++) alarms.push(A(String(i).padStart(2,'0'), 'warning', {acked:true}));
+  const txt = C.formatOpenList('Titel', alarms, {max: 15});
+  assert.match(txt, /… und 5 weitere/);
+});
+
 test('touchesUnacked: nur fired/escalated setzen den Erinnerungstakt zurück', () => {
   assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'silenced'}]), false);
   assert.equal(C.touchesUnacked([{kind:'resolved'}, {kind:'fired'}]), true);
   assert.equal(C.touchesUnacked([{kind:'escalated'}]), true);
+});
+
+test('coversAllUnacked: flatternde Warnung feuert, älterer unquittierter Critical bleibt außen vor → false', () => {
+  const alarms = [
+    {id:'critical-alt', acked:false},
+    {id:'warn-flap', acked:false},
+  ];
+  const events = [{kind:'fired', alarm:{id:'warn-flap'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), false);
+});
+
+test('coversAllUnacked: Sammelnachricht nennt jeden unquittierten Alarm → true', () => {
+  const alarms = [
+    {id:'a', acked:false},
+    {id:'b', acked:false},
+  ];
+  const events = [
+    {kind:'fired', alarm:{id:'a'}},
+    {kind:'escalated', alarm:{id:'b'}},
+  ];
+  assert.equal(C.coversAllUnacked(events, alarms), true);
+});
+
+test('coversAllUnacked: keine fired/escalated Events → false', () => {
+  const alarms = [{id:'a', acked:false}];
+  const events = [{kind:'resolved', alarm:{id:'a'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), false);
+});
+
+test('coversAllUnacked: alle Alarme quittiert, ein fired → true (leere Deckungsmenge ist erfüllt)', () => {
+  const alarms = [{id:'a', acked:true}, {id:'b', acked:true}];
+  const events = [{kind:'fired', alarm:{id:'a'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), true);
+});
+
+test('coversAllUnacked: fired nennt einen unquittierten, aber ein zweiter unquittierter bleibt ungenannt → false', () => {
+  const alarms = [{id:'a', acked:false}, {id:'b', acked:false}];
+  const events = [{kind:'fired', alarm:{id:'a'}}];
+  assert.equal(C.coversAllUnacked(events, alarms), false);
 });
 
 const H = 3600 * 1000;
