@@ -205,3 +205,45 @@ test('computeOutputs: ackId hat Präzedenz vor ack (nur der eine, nicht alle)', 
   assert.equal(r.state.alarms.find(x => x.id === 'a').acked, true);
   assert.equal(r.state.alarms.find(x => x.id === 'b').acked, false);
 });
+
+function manyAlarms(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({
+    id: 'id' + String(i).padStart(3, '0'), host: 'host' + i, name: 'Alarmname Nummer ' + i,
+    severity: i < 3 ? 'critical' : 'warning',
+    summary: 'Eine typische Grafana-Zusammenfassung mit gut hundert Zeichen Länge, damit das Budget realistisch greift ' + i,
+    since: '2026-09-23T10:00:00Z', acked: i % 2 === 0,
+  });
+  return out;
+}
+
+test('buildList: unter Budget → alles drin, omitted 0', () => {
+  const l = C.buildList('office', manyAlarms(3), TS);
+  assert.equal(l.count, 3);
+  assert.equal(l.alarms.length, 3);
+  assert.equal(l.omitted, 0);
+  assert.equal(l.omitted_unacked, 0);
+});
+
+test('buildList: über Budget → kürzt vom Ende, zählt omitted + omitted_unacked, JSON paßt', () => {
+  const all = manyAlarms(60);
+  const l = C.buildList('office', all, TS, 7000);
+  assert.ok(Buffer.byteLength(JSON.stringify(l), 'utf8') <= 7000);
+  assert.ok(l.omitted > 0);
+  assert.equal(l.count, l.alarms.length);                 // Invariante count ≡ alarms.length
+  assert.equal(l.count + l.omitted, 60);
+  const dropped = all.slice(l.alarms.length);
+  assert.equal(l.omitted_unacked, dropped.filter(a => !a.acked).length);
+  assert.deepEqual(l.alarms.map(a => a.id), all.slice(0, l.alarms.length).map(a => a.id)); // Reihenfolge = Sortierung
+  assert.equal(l.max_severity, 'critical');
+});
+
+test('buildList: kritische Alarme fallen nie vor Warnungen heraus', () => {
+  const l = C.buildList('office', manyAlarms(60), TS, 7000);
+  assert.equal(l.alarms.filter(a => a.severity === 'critical').length, 3);
+});
+
+test('utf8Bytes: Umlaut und Emoji zählen mehrbytig', () => {
+  assert.equal(C.utf8Bytes('aä🔴'), 1 + 2 + 4);
+  assert.equal(unescape(encodeURIComponent('aä🔴')).length, 7);   // Fallback-Zweig, ohne Buffer
+});

@@ -8,6 +8,7 @@
 // Pure Alarm-Orchestrator-Logik. KEINE ioBroker-Globals zur Ladezeit (node-testbar).
 // In ioBroker als Global-Skript: die Funktionen liegen damit im Scope aller Skripte.
 const SCHEMA_VERSION = 1;
+const LIST_MAX_BYTES = 7000;   // unter dem 8192-Byte-MQTT-Puffer des Buttons (MqttLink.h)
 const SEV_RANK = { info: 0, warning: 1, critical: 2 };
 
 function severityRank(sev) {
@@ -61,16 +62,41 @@ function computeSignaltower(alarms) {
   return { mode: 'off' };
 }
 
-function buildList(deviceId, alarms, ts) {
+// UTF-8-Bytelänge ohne Annahme über den Sandbox-Scope: Buffer, falls vorhanden, sonst
+// encodeURIComponent-Zählung (Umlaute/Emoji zählen dann ebenfalls mehrbytig).
+function utf8Bytes(s) {
+  if (typeof Buffer !== 'undefined') return Buffer.byteLength(s, 'utf8');
+  return unescape(encodeURIComponent(s)).length;
+}
+
+function listEntry(a, ts) {
   return {
-    schema_version: SCHEMA_VERSION, device_id: deviceId, ts,
-    count: alarms.length, max_severity: maxSeverity(alarms),
-    alarms: alarms.map(a => ({
-      id: a.id, host: a.host, name: a.name, severity: a.severity,
-      summary: a.summary || '', since: a.since || ts, runbook_url: a.runbook_url || null,
-      acked: !!a.acked,   // Contract §3.1 (additiv, schema bleibt 1): Button kennt den Quittier-Stand
-    })),
+    id: a.id, host: a.host, name: a.name, severity: a.severity,
+    summary: a.summary || '', since: a.since || ts, runbook_url: a.runbook_url || null,
+    acked: !!a.acked,   // Contract §3.1 (additiv, schema bleibt 1): Button kennt den Quittier-Stand
   };
+}
+
+// Byte-Budget: alarms[] kommt sortiert (critical zuerst, dann älteste zuerst). Bei Überlauf
+// fallen die letzten Einträge heraus (= jüngste Warnungen) und werden ehrlich gezählt, statt
+// den Button-Puffer still zu sprengen. count ≡ ausgelieferte alarms.length (Lehre 29.06.).
+function buildList(deviceId, alarms, ts, maxBytes) {
+  const budget = (typeof maxBytes === 'number') ? maxBytes : LIST_MAX_BYTES;
+  const entries = alarms.map(a => listEntry(a, ts));
+  const make = (n) => ({
+    schema_version: SCHEMA_VERSION, device_id: deviceId, ts,
+    count: n, max_severity: maxSeverity(alarms),
+    omitted: alarms.length - n,
+    omitted_unacked: alarms.slice(n).filter(a => !a.acked).length,
+    alarms: entries.slice(0, n),
+  });
+  let n = entries.length;
+  let out = make(n);
+  while (n > 0 && utf8Bytes(JSON.stringify(out)) > budget) {
+    n -= 1;
+    out = make(n);
+  }
+  return out;
 }
 
 function buildNew(attention, ts) {
@@ -124,8 +150,8 @@ function computeOutputs(prevState, sourcesMap, opts) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    SCHEMA_VERSION, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
-    computeSignaltower, buildList, buildNew, buildHeartbeat, buildTestTelegram, computeOutputs,
+    SCHEMA_VERSION, LIST_MAX_BYTES, severityRank, maxSeverity, mergeSources, reconcile, applyAck,
+    computeSignaltower, buildList, buildNew, buildHeartbeat, buildTestTelegram, computeOutputs, utf8Bytes,
   };
 }
 
