@@ -118,3 +118,4 @@ if (typeof module !== 'undefined' && module.exports) {
   poll(); // sofort beim Start, nicht erst nach POLL_MS warten
   log('alarm-source-grafana gestartet — Poll alle ' + (POLL_MS / 1000) + 's → ' + GRAFANA_URL, 'info');
 }
+
