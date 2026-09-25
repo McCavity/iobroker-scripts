@@ -104,6 +104,18 @@ onSwitch('00158d0007c5bcc8', 'Studio Tür', {
 });
 
 // ---------------------------------------------------------------------------
+//  2b) Marcels Zimmer — Deckenleuchten (ZigBee-Gruppe group_4 = 3 LED-E27 atomar)
+//      Seit 2026-09-25, ersetzt die alten Glühstrahler. Belegung wie Büro Tür:
+//      Hold (Müll quittieren) läuft NICHT hier, sondern im Blockly-Skript
+//      buttonplus — dort ist dieser Schalter als zweiter Hold-Trigger eingetragen.
+// ---------------------------------------------------------------------------
+onSwitch('00158d008c747e9a', 'Marcel', {
+    single: () => toggle('zigbee.0.group_4.state'),
+    double: () => ackAlarm('Marcel'),
+    hold:   null,
+});
+
+// ---------------------------------------------------------------------------
 //  3) Schlafzimmer Leselampen (separate Sonoff-Steckdosen pro Seite)
 // ---------------------------------------------------------------------------
 onSwitch('00158d0007c58a16', 'Schlafzimmer Henning', {
@@ -269,5 +281,5 @@ on({ id: `zigbee.0.${WZ_MOTION_DEV}.occupancy`, change: 'ne' }, (obj) => {
 // ============================================================================
 //  Initialisierungs-Log
 // ============================================================================
-log('scenes.lighting.smart-switches geladen — 7 Switches + 1 Motion-Trigger aktiv', 'info');
+log('scenes.lighting.smart-switches geladen — 8 Switches + 1 Motion-Trigger aktiv', 'info');
 
