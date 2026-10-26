@@ -10,7 +10,8 @@
 // ============================================================================
 //  Ersetzt: scenes.0-Szene "Weihnachten" (Fensterbeleuchtung in der
 //  Weihnachtszeit). Hört auf den vorhandenen Trigger-Datenpunkt und
-//  schaltet die 7 Sonoff-Steckdosen parallel ein bzw. aus.
+//  schaltet die 7 Sonoff-Steckdosen und 3 Shelly-Zwischenstecker parallel
+//  ein bzw. aus.
 //
 //  Pfad in ioBroker: script.js.scenes.lighting.christmas
 //  Engine-Type: JavaScript/Typescript (NICHT Blockly)
@@ -23,8 +24,11 @@
 //  Vault versionierbar.
 //
 //  Trigger-Verhalten (1:1 wie die Original-Szene):
-//    Trigger = true  → alle 7 Steckdosen TRUE
-//    Trigger = false → alle 7 Steckdosen FALSE
+//    Trigger = true  → alle 10 Steckdosen TRUE
+//    Trigger = false → alle 10 Steckdosen FALSE
+//
+//  2026-10-26: Lichterketten Werkstatt, Studio, Labor dazu (Shelly Plug S
+//  Gen3, `shelly.0`, Schaltzustand in Relay0.Switch).
 //
 //  Trigger-Quellen (heute):
 //    - Couchtisch-Single-Click via scenes-lighting-smart-switches.js
@@ -48,6 +52,9 @@ const CHRISTMAS_LIGHTS = [
     'sonoff.0.Büro Lichterkette.POWER',
     'sonoff.0.Wohnzimmer Couch.POWER',
     'sonoff.0.Wohnzimmer Anlage.POWER',
+    'shelly.0.shellyplugsg3#9070694d987c#1.Relay0.Switch', // Werkstatt Lichterkette
+    'shelly.0.shellyplugsg3#9070694be120#1.Relay0.Switch', // Studio Lichterkette
+    'shelly.0.shellyplugsg3#d885ac1782bc#1.Relay0.Switch', // Labor Lichterkette
 ];
 
 on({ id: CHRISTMAS_TRIGGER, change: 'ne' }, (obj) => {
@@ -58,5 +65,5 @@ on({ id: CHRISTMAS_TRIGGER, change: 'ne' }, (obj) => {
     }
 });
 
-log('scenes.lighting.christmas geladen — 7 Fensterbeleuchtungs-Steckdosen verdrahtet', 'info');
+log(`scenes.lighting.christmas geladen — ${CHRISTMAS_LIGHTS.length} Fensterbeleuchtungs-Steckdosen verdrahtet`, 'info');
 
