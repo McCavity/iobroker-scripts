@@ -129,31 +129,12 @@ async function schalte_av(programm) {
 
 // Beschreibe diese Funktion …
 async function send_signal(colour, mode, duration) {
-      // ── inputs ───────────────────────────────────────────────────────
-      //var colour   = "WHITE";      // "BLUE" or "WHITE"
-      //var mode     = "fast_blink"; // "off", "on", "slow_blink", "fast_blink"
-      //var duration = 3;            // seconds, or null for indefinite
-
-      // ── build payload ────────────────────────────────────────────────
-      var payload = { colour: colour, mode: mode, duration: duration };
-
-      // ── send request ─────────────────────────────────────────────────
-      httpPost(
-          'http://172.16.31.241:5000/signal?key=b6f43fe3b5ca508930dbdeff07d4ed37f9f032603f01315a340858b3806464e8',
-          JSON.stringify(payload),
-          {
-              timeout: 5000,
-              headers: { 'Content-Type': 'application/json' }
-          },
-          function (error, response) {
-              var result = {
-                  statusCode:   error ? null          : response.statusCode,
-                  errorMessage: error ? String(error) : null,
-                  body:         error ? null          : response.data
-              };
-              console.log('signaltower result: ' + JSON.stringify(result));
-          }
-      );
+      // Über den signaltower-controller senden (javascript.0.signaltower.request).
+      // Endpoint und Key liegen seit 2026-10-30 in /etc/iobroker-secrets/signaltower.json,
+      // nicht mehr in diesem Skript; das Ergebnis steht in javascript.0.signaltower.last_status.
+      setState('javascript.0.signaltower.request',
+               JSON.stringify({ colour: colour, mode: mode, duration: duration }),
+               false);
 }
 
 

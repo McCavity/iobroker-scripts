@@ -20,7 +20,38 @@
 //
 //  Pattern: Helper → schreibt JSON in 0_userdata.0.signaltower.request →
 //  Controller hört, ruft HTTP, schreibt Status in 0_userdata.0.signaltower.*
+//
+//  Update 2026-10-30: Endpoint + API-Key stehen nicht mehr im Skript, sondern
+//  in /etc/iobroker-secrets/signaltower.json auf dem ioBroker-Host
+//  ({"url": "http://<host>:5000", "key": "…"}, iobroker:iobroker 0600).
+//  Grund: das Repo ist öffentlich. Ein 0_userdata-Datenpunkt wäre über die
+//  SimpleAPI im LAN lesbar und scheidet deshalb aus.
 // ============================================================================
+
+const SIGNALTOWER_SECRETS = '/etc/iobroker-secrets/signaltower.json';
+
+/**
+ * Endpoint + Key der Signalsäule aus der Secret-Datei. Wird bei jedem Aufruf
+ * neu gelesen — nach einer Key-Rotation genügt es, die Datei zu tauschen.
+ * @returns {{url: string, key: string} | null}  null, wenn nicht lesbar
+ */
+function signaltowerConfig() {
+    try {
+        const raw = require('fs').readFileSync(SIGNALTOWER_SECRETS, 'utf8');
+        let cfg;
+        // Eigener Fehlertext: neuere Node-Versionen zitieren in der
+        // JSON.parse-Meldung einen Ausschnitt des Inhalts — also ggf. den Key.
+        try { cfg = JSON.parse(raw); } catch (_) { throw new Error('kein gültiges JSON'); }
+        if (typeof cfg.url !== 'string' || typeof cfg.key !== 'string' || !cfg.url || !cfg.key) {
+            throw new Error('url/key fehlt');
+        }
+        return { url: cfg.url.replace(/\/+$/, ''), key: cfg.key };
+    } catch (e) {
+        // Nur die Fehlermeldung loggen, nie den Dateiinhalt
+        log(`signaltower: ${SIGNALTOWER_SECRETS} nicht lesbar — ${e.message}`, 'error');
+        return null;
+    }
+}
 
 /**
  * Generischer Signaltower-Aufruf.
