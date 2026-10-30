@@ -16,6 +16,11 @@
 //   (zwei Ticks Entprellung, Ethernet des Druckers flattert).
 // Drucker nicht erreichbar → Steckdose entscheidet: aus → aus; Leistung ≥ HEATING_W
 // → Zustand halten (Druck läuft vermutlich weiter); sonst 90 s halten, dann aus.
+//
+// „fertig“ kommt aus moon.lastJob ({status, endMs}, letzter Job der Moonraker-Historie):
+// der QIDI setzt print_stats 9 s nach Druckende von printing direkt auf standby zurück
+// (gemessen 30.10.2026, 18:24) — „complete“ ist beim 10-s-Takt praktisch nie zu sehen.
+// Die 20 min zählen ab Jobende; so überlebt „fertig“ auch einen Skript-Neustart.
 
 const DRUCKER_HEATING_W = 40;            // gemessen 23.–30.10.: Ruhe ≤ 16 W, Druck-Tiefstwert 46 W
 const DRUCKER_HOLD_LOW_MS = 90 * 1000;   // Link-Aussetzer gemessen 9–35 s
@@ -26,6 +31,11 @@ const DRUCKER_ALARM_ID = 'drucker-fehler';
 function druckerInitialMemory() {
   return { white: 'off', status: 'unbekannt', alarm: null,
            unreachableSince: null, completeSince: null, errorTicks: 0, errorSince: null };
+}
+
+function druckerFinishedAt(moon) {
+  const j = moon.lastJob;
+  return j && j.status === 'completed' && typeof j.endMs === 'number' ? j.endMs : null;
 }
 
 function druckerTick({ now, moon, plug, mem }) {
@@ -71,10 +81,17 @@ function druckerTick({ now, moon, plug, mem }) {
     case 'paused':
       return out('fast_blink', 'pausiert', null);
     case 'complete':
-      if (m.completeSince === null) m.completeSince = now;
-      if (now - m.completeSince < DRUCKER_COMPLETE_MS) return out('slow_blink', 'fertig', null);
+    case 'standby': {
+      const end = druckerFinishedAt(moon);
+      if (end !== null) m.completeSince = Math.min(end, now);
+      else if (moon.state === 'complete' && m.completeSince === null) m.completeSince = now;
+      else if (moon.state === 'standby') m.completeSince = null;
+      if (m.completeSince !== null && now - m.completeSince < DRUCKER_COMPLETE_MS)
+        return out('slow_blink', 'fertig', null);
       return out('off', 'bereit', null);
+    }
     case 'cancelled':
+      m.completeSince = null;
       return out('off', 'abgebrochen', null);
     default:
       return out('off', 'bereit', null);

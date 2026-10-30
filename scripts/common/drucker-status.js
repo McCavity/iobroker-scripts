@@ -23,6 +23,7 @@
 // ============================================================================
 
 const MOONRAKER = 'http://p3dapp01.lan:7125/printer/objects/query?webhooks&print_stats&display_status';
+const HISTORY = 'http://p3dapp01.lan:7125/server/history/list?limit=1&order=desc';
 const PLUG = 'sonoff.0.3D Drucker.';
 const POLL_MS = 10 * 1000;
 const HTTP_TIMEOUT_MS = 9000;            // gemessen 30.10.: Median 1 s, Spitzen bis 14 s
@@ -44,6 +45,7 @@ let lastSentWhite = null;
 let downSince = null;                     // Beginn des aktuellen Moonraker-Ausfalls
 let inFlight = false;                     // keine zweite Abfrage, solange eine läuft
 let stopped = false;                      // gesetzt in onStop — siehe dort
+let lastJob;                              // letzter Job der Historie; undefined = in dieser Leerlaufphase noch nicht geholt
 
 function readPlug(now) {
     const get = (id) => existsState(PLUG + id) ? getState(PLUG + id) : null;
@@ -87,10 +89,10 @@ function apply(moon) {
 // httpGet fest auf Stufe error (sandbox.js, ohne Option). Das Ethernet des
 // Druckers flattert (Gewährleistungsfall) — hier wird je Ausfall EINMAL geloggt,
 // bei Rückkehr mit Dauer. Diese Zeilen sind zugleich der Beleg für QIDI.
-function fetchStatus(cb) {
+function fetchUrl(url, cb) {
     let done = false;
     const finish = (err, body) => { if (!done) { done = true; cb(err, body); } };
-    const req = require('http').get(MOONRAKER, { timeout: HTTP_TIMEOUT_MS }, (res) => {
+    const req = require('http').get(url, { timeout: HTTP_TIMEOUT_MS }, (res) => {
         let body = '';
         res.setEncoding('utf8');
         res.on('data', (c) => { body += c; });
@@ -111,12 +113,36 @@ function noteReachability(ok, err) {
     }
 }
 
+// Letzter Job der Historie → {status, endMs}, null wenn keiner, undefined wenn unlesbar.
+function parseLastJob(data) {
+    try {
+        const j = JSON.parse(data).result.jobs[0];
+        if (!j) return null;
+        return { status: j.status, endMs: typeof j.end_time === 'number' ? j.end_time * 1000 : null };
+    } catch (e) {
+        return undefined;
+    }
+}
+
+// „fertig“ steht nur in der Historie (siehe drucker-core). Geholt wird sie einmal je
+// Leerlaufphase — beim Übergang aus dem Druck und nach einem Skript-Neustart; scheitert
+// der Abruf, beim nächsten Takt erneut.
+function withLastJob(moon, cb) {
+    if (!moon || (moon.state !== 'standby' && moon.state !== 'complete')) {
+        lastJob = undefined;
+        return cb(moon);
+    }
+    if (lastJob !== undefined) return cb(Object.assign(moon, { lastJob }));
+    fetchUrl(HISTORY, (error, data) => {
+        if (!error) lastJob = parseLastJob(data);
+        cb(Object.assign(moon, { lastJob: lastJob || null }));
+    });
+}
+
 function poll() {
     if (inFlight) return;
     inFlight = true;
-    fetchStatus((error, data) => {
-        inFlight = false;
-        if (stopped) return;
+    fetchUrl(MOONRAKER, (error, data) => {
         let moon = null;
         if (!error) {
             try {
@@ -133,7 +159,10 @@ function poll() {
             }
         }
         noteReachability(!error, error);
-        apply(moon);
+        withLastJob(moon, (m) => {
+            inFlight = false;
+            if (!stopped) apply(m);
+        });
     });
 }
 

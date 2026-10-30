@@ -41,6 +41,34 @@ test('fertig endet sofort beim nächsten Druckstart', () => {
   assert.equal(r2.white, 'slow_blink');
 });
 
+// Beleg 30.10.2026, 18:24: Der QIDI setzt print_stats 9 s nach Druckende von printing direkt
+// auf standby zurück (Dateiname leer). „complete“ ist beim 10-s-Takt praktisch nie zu sehen;
+// Quelle für „fertig“ ist deshalb der letzte Job aus der Moonraker-Historie.
+const done = (endMs, status = 'completed') => ({ state: 'standby', webhooks: 'ready', lastJob: { status, endMs } });
+
+test('standby nach abgeschlossenem Job blinkt langsam, 20 Minuten ab Jobende', () => {
+  const steps = [[T0, ok('printing'), plugOn(200)], [T0 + 10 * S, done(T0 + 1 * S), plugOn(15)]];
+  const r = run(steps);
+  assert.equal(r.white, 'slow_blink');
+  assert.equal(r.status, 'fertig');
+  assert.equal(run([...steps, [T0 + 19 * MIN, done(T0 + 1 * S), plugOn(15)]]).white, 'slow_blink');
+  assert.equal(run([...steps, [T0 + 21 * MIN, done(T0 + 1 * S), plugOn(15)]]).white, 'off');
+});
+
+test('standby nach abgebrochenem Job bleibt aus', () => {
+  assert.equal(run([[T0, done(T0 - 5 * S, 'cancelled'), plugOn(15)]]).white, 'off');
+});
+
+test('Skript-Neustart kurz nach Druckende blinkt weiter, alter Job nicht', () => {
+  assert.equal(run([[T0, done(T0 - 5 * MIN), plugOn(15)]]).white, 'slow_blink');
+  assert.equal(run([[T0, done(T0 - 3 * 60 * MIN), plugOn(15)]]).white, 'off');
+});
+
+test('complete mit Jobende zählt ab Jobende', () => {
+  const r = run([[T0, Object.assign(ok('complete'), { lastJob: { status: 'completed', endMs: T0 - 21 * MIN } }), plugOn(15)]]);
+  assert.equal(r.white, 'off');
+});
+
 test('Fehler braucht zwei Ticks (Entprellung), dann Alarm + Weiß aus', () => {
   const one = run([[T0, ok('printing'), plugOn(200)], [T0 + 10 * S, ok('error'), plugOn(50)]]);
   assert.equal(one.alarm, null);
