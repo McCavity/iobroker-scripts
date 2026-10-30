@@ -18,15 +18,11 @@
 //  Datenpunkte werden beim ersten Skript-Start automatisch angelegt
 //  (createState ist idempotent).
 //
-//  Endpoint + Key: zentral hier definiert, nirgendwo sonst.
-//
-//  Update 2026-05-26: rbhapp01 von WLAN (172.16.47.242, Smart Home VLAN)
-//  auf Kabel (172.16.31.241, HomeLab VLAN) migriert — saubere Trennung
-//  "Smart Home = WLAN, HomeLab = Kabel" wiederhergestellt.
+//  Endpoint + Key: aus signaltowerConfig() (Global-Skript signaltower-helpers,
+//  liest /etc/iobroker-secrets/signaltower.json) — seit 2026-10-30 nicht mehr
+//  im Skript, weil das Repo öffentlich ist. Key geht als Header, nicht in der URL.
 // ============================================================================
 
-const SIGNALTOWER_URL  = 'http://172.16.31.241:5000/signal';
-const SIGNALTOWER_KEY  = 'b6f43fe3b5ca508930dbdeff07d4ed37f9f032603f01315a340858b3806464e8';
 const HTTP_TIMEOUT_MS  = 5000;
 
 // ---------------------------------------------------------------------------
@@ -72,10 +68,16 @@ on({ id: 'javascript.0.signaltower.request', ack: false }, (obj) => {
         return;
     }
 
+    const cfg = signaltowerConfig();
+    if (!cfg) {
+        setState('javascript.0.signaltower.last_status', 'error: Secret-Datei nicht lesbar', true);
+        return;
+    }
+
     httpPost(
-        `${SIGNALTOWER_URL}?key=${SIGNALTOWER_KEY}`,
+        `${cfg.url}/signal`,
         JSON.stringify(payload),
-        { timeout: HTTP_TIMEOUT_MS, headers: { 'Content-Type': 'application/json' } },
+        { timeout: HTTP_TIMEOUT_MS, headers: { 'Content-Type': 'application/json', 'X-API-Key': cfg.key } },
         (error, response) => {
             const result = error
                 ? `error: ${error}`
@@ -87,5 +89,5 @@ on({ id: 'javascript.0.signaltower.request', ack: false }, (obj) => {
     );
 });
 
-log('signaltower-controller bereit — endpoint=' + SIGNALTOWER_URL, 'info');
+log('signaltower-controller bereit — endpoint=' + ((signaltowerConfig() || {}).url || 'NICHT KONFIGURIERT'), 'info');
 

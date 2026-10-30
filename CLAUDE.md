@@ -36,7 +36,7 @@ The UI's official ZIP export sidesteps all of this. ioBroker exports cleanly, Ma
 - **License:** MIT
 - **Branch protection:** Solo-Maintainer-Pattern (required PRs but `required_approving_review_count: 0`, `enforce_admins: false` — Henning bypasses for trivial direct pushes)
 - **Public:** Yes — illustrative for others
-- **Secrets in committed scripts:** the signaltower API key is committed because the endpoint is LAN-only (172.16.31.241). If this ever changes, rotate AND pull the key out into a config file before re-exporting.
+- **Secrets in committed scripts: none.** This repo is public. Since 2026-10-30 the signaltower endpoint and API key live in `/etc/iobroker-secrets/signaltower.json` on the ioBroker host (`iobroker:iobroker`, 0600) and are read via `signaltowerConfig()` from the global script `signaltower-helpers`. Before that the key was committed on the assumption "LAN-only is enough" — wrong for a public repo, so it was rotated. Do not put keys, tokens or internal IPs into scripts; a `0_userdata` state is no alternative, it is readable via SimpleAPI. Run `leak-check` on the tree before pushing.
 
 ## File format details
 

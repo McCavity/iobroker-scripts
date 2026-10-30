@@ -21,18 +21,20 @@
 //  Beim Skript-Start wird zusätzlich sofort einmal gefeuert (= GREEN ohne
 //  Wartezeit bis zur nächsten vollen Minute).
 //
-//  Eigene Konstanten für URL + Key — bewusst NICHT über den Controller
-//  geroutet: ein hängender Controller darf den Watchdog nicht stumm schalten.
+//  Bewusst NICHT über den Controller geroutet: ein hängender Controller darf
+//  den Watchdog nicht stumm schalten. URL + Key kommen seit 2026-10-30 aus
+//  signaltowerConfig() (Global-Skript signaltower-helpers) — eine reine
+//  Dateilesefunktion, kein gemeinsamer Zustand mit dem Controller.
 // ============================================================================
 
-const HEARTBEAT_URL = 'http://172.16.31.241:5000/heartbeat';
-const HEARTBEAT_KEY = 'b6f43fe3b5ca508930dbdeff07d4ed37f9f032603f01315a340858b3806464e8';
 const TIMEOUT_MS    = 2000;
 
 function sendHeartbeat() {
+    const cfg = signaltowerConfig();
+    if (!cfg) return;   // Fehler ist geloggt; der Tower geht nach 2 Min auf RED
     httpGet(
-        `${HEARTBEAT_URL}?key=${HEARTBEAT_KEY}`,
-        { timeout: TIMEOUT_MS },
+        `${cfg.url}/heartbeat`,
+        { timeout: TIMEOUT_MS, headers: { 'X-API-Key': cfg.key } },
         (error, response) => {
             const statusCode = response && response.statusCode;
             if (error || statusCode !== 200) {
@@ -55,5 +57,5 @@ schedule('* * * * *', sendHeartbeat);
 // und nicht bis zur nächsten vollen Minute auf der RED-Schwelle bleibt.
 sendHeartbeat();
 
-log('signaltower-heartbeat bereit — 1× pro Minute → ' + HEARTBEAT_URL, 'info');
+log('signaltower-heartbeat bereit — 1× pro Minute → ' + ((signaltowerConfig() || {}).url || 'NICHT KONFIGURIERT'), 'info');
 

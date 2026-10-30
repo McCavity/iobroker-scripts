@@ -47,7 +47,7 @@ Each `.js` file starts with a comment block carrying the object's metadata, then
  * enabled:    true
  */
 
-const HEARTBEAT_URL = 'http://172.16.31.241:5000/heartbeat';
+const TIMEOUT_MS    = 2000;
 // ... rest of the script
 ```
 
