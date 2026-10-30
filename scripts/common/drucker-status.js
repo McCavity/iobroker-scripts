@@ -25,7 +25,7 @@
 const MOONRAKER = 'http://p3dapp01.lan:7125/printer/objects/query?webhooks&print_stats&display_status';
 const PLUG = 'sonoff.0.3D Drucker.';
 const POLL_MS = 10 * 1000;
-const HTTP_TIMEOUT_MS = 5000;
+const HTTP_TIMEOUT_MS = 9000;            // gemessen 30.10.: Median 1 s, Spitzen bis 14 s
 const WHITE_DURATION_S = 60;
 const PLUG_STALE_MS = 60 * 1000;          // Tasmota meldet alle ~10 s
 const DP = '0_userdata.0.drucker.';
@@ -41,6 +41,8 @@ createState(SOURCE, '[]', { name: 'alerting sources.drucker', type: 'string', ro
 
 let mem = druckerInitialMemory();
 let lastSentWhite = null;
+let downSince = null;                     // Beginn des aktuellen Moonraker-Ausfalls
+let inFlight = false;                     // keine zweite Abfrage, solange eine läuft
 
 function readPlug(now) {
     const get = (id) => existsState(PLUG + id) ? getState(PLUG + id) : null;
@@ -80,12 +82,43 @@ function apply(moon) {
     setIfChanged(SOURCE, JSON.stringify(r.alarm ? [r.alarm] : []));
 }
 
+// Eigener HTTP-Abruf statt httpGet(): der Adapter loggt jeden Fehlschlag von
+// httpGet fest auf Stufe error (sandbox.js, ohne Option). Das Ethernet des
+// Druckers flattert (Gewährleistungsfall) — hier wird je Ausfall EINMAL geloggt,
+// bei Rückkehr mit Dauer. Diese Zeilen sind zugleich der Beleg für QIDI.
+function fetchStatus(cb) {
+    let done = false;
+    const finish = (err, body) => { if (!done) { done = true; cb(err, body); } };
+    const req = require('http').get(MOONRAKER, { timeout: HTTP_TIMEOUT_MS }, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => finish(res.statusCode === 200 ? null : new Error('HTTP ' + res.statusCode), body));
+    });
+    req.on('timeout', () => req.destroy(new Error('Timeout ' + HTTP_TIMEOUT_MS + ' ms')));
+    req.on('error', (e) => finish(e));
+}
+
+function noteReachability(ok, err) {
+    const now = Date.now();
+    if (!ok && downSince === null) {
+        downSince = now;
+        log(`drucker-status: Moonraker nicht erreichbar (${err && err.message})`, 'info');
+    } else if (ok && downSince !== null) {
+        log(`drucker-status: Moonraker wieder erreichbar nach ${Math.round((now - downSince) / 1000)} s`, 'info');
+        downSince = null;
+    }
+}
+
 function poll() {
-    httpGet(MOONRAKER, { timeout: HTTP_TIMEOUT_MS }, (error, response) => {
+    if (inFlight) return;
+    inFlight = true;
+    fetchStatus((error, data) => {
+        inFlight = false;
         let moon = null;
-        if (!error && response && response.statusCode === 200) {
+        if (!error) {
             try {
-                const s = JSON.parse(response.data).result.status;
+                const s = JSON.parse(data).result.status;
                 moon = {
                     state: s.print_stats.state,
                     webhooks: s.webhooks.state,
@@ -97,6 +130,7 @@ function poll() {
                 log(`drucker-status: Antwort nicht lesbar — ${e.message}`, 'warn');
             }
         }
+        noteReachability(!error, error);
         apply(moon);
     });
 }
