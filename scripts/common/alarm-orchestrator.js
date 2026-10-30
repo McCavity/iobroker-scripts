@@ -9,7 +9,7 @@
 // → Signaltower (Global signaltower-helpers) + rote Rundumleuchte + Telegram-Sammelnachricht (Phase 2) + state.
 const DP = '0_userdata.0.alerting.';
 const DEVICE_ID = 'office';                // Standort des Buttons (Slice 2: war 'werkstatt')
-const SOURCES = ['test', 'grafana'];      // beide Quellen aktiv
+const SOURCES = ['test', 'grafana', 'drucker'];  // drucker seit 2026-10-30 (common/drucker-status)
 const PERSIST = -1;                        // rbhapp01: duration -1 = dauerhaft bis nächstes Signal
 const SONOFF_BEACON = 'sonoff.0.Alarm.POWER';  // rote Rundumleuchte — folgt dem Signaltower-fast_blink
 const MQTT_TOPIC = 'alarmbutton/' + DEVICE_ID + '/';    // Slice 2: Publish via mqtt.0-Messagebox (sendMessage2Client)
