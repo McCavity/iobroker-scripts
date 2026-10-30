@@ -43,6 +43,7 @@ let mem = druckerInitialMemory();
 let lastSentWhite = null;
 let downSince = null;                     // Beginn des aktuellen Moonraker-Ausfalls
 let inFlight = false;                     // keine zweite Abfrage, solange eine läuft
+let stopped = false;                      // gesetzt in onStop — siehe dort
 
 function readPlug(now) {
     const get = (id) => existsState(PLUG + id) ? getState(PLUG + id) : null;
@@ -115,6 +116,7 @@ function poll() {
     inFlight = true;
     fetchStatus((error, data) => {
         inFlight = false;
+        if (stopped) return;
         let moon = null;
         if (!error) {
             try {
@@ -138,6 +140,9 @@ function poll() {
 schedule(`*/${POLL_MS / 1000} * * * * *`, poll);
 poll();
 
-onStop(() => { signal('WHITE', 'off'); }, 2000);
+// require('http') läuft am Adapter vorbei: anders als bei httpGet bricht ein
+// Skript-Stopp eine laufende Abfrage NICHT ab. Ohne `stopped` setzte deren
+// späte Antwort Weiß nach dem Stopp wieder auf „an“ (gemessen 30.10., 15:38).
+onStop(() => { stopped = true; signal('WHITE', 'off'); }, 2000);
 
 log('drucker-status bereit — Takt ' + POLL_MS / 1000 + ' s', 'info');
